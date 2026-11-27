@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui';
 
@@ -17,6 +16,7 @@ import '../models/serialization.dart';
 import 'local_cache_store.dart';
 import 'ml_server_client.dart';
 import 'repositories.dart';
+import 'training_repository.dart';
 
 SupabaseClient? get _supabaseOrNull => AppConfig.supabaseReady ? Supabase.instance.client : null;
 
@@ -231,34 +231,39 @@ class CloudReferenceRepository implements ReferenceRepository {
   }
 }
 
-/// Offline-first + Cloud-synced + Hybrid AI implementation of [IdentificationRepository].
+/// Production Cloud + Local Offline-Sync implementation of [IdentificationRepository].
 ///
-/// - Saves real microscope images, detections, and reports immediately to [LocalCacheStore].
-/// - Syncs automatically to Supabase PostgreSQL + `specimens` Storage bucket when signed in & online.
-/// - Calls the Python FastAPI ML server (`/v1/detect`, `/v1/check-box`, `/v1/analyze`) when
-///   online & reachable, falling back seamlessly to on-device evaluation offline.
+/// Zero mock or predefined data:
+/// - `specimens()` and `history()` return ONLY real user/local records (empty `[]` until created).
+/// - `analyze()` and `checkBox()` require a real ML server / trained ONNX weights — never inventing
+///   synthetic genera from hashes or seeds.
+/// - Automatically feeds opted-in user detections into `public.training_samples` (Source 2).
 class HybridIdentificationRepository implements IdentificationRepository {
   HybridIdentificationRepository({
     required this.cache,
     required this.mlClient,
     required this.reference,
+    required this.training,
     required this.now,
     required this.isOnline,
-    this.latency = const Duration(milliseconds: 250),
-  }) : _demoFallback = MockIdentificationRepository(now: now, latency: latency);
+    required this.trainingOptIn,
+    this.latency = Duration.zero,
+  });
 
   final LocalCacheStore cache;
   final MlServerClient mlClient;
   final ReferenceRepository reference;
+  final TrainingDatasetRepository training;
   final DateTime Function() now;
   final bool Function() isOnline;
+  final bool Function() trainingOptIn;
   final Duration latency;
-  final MockIdentificationRepository _demoFallback;
 
   String? get _userId => _supabaseOrNull?.auth.currentUser?.id;
 
-  /// Imports a real image file (from file picker, folder import, or camera capture),
-  /// runs quality & candidate detection, stores locally, and uploads/queues for Supabase.
+  /// Imports a real image file (from file picker, folder import, paired phone, or camera),
+  /// runs OpenCV/ONNX quality & candidate detection if the ML server is reachable,
+  /// stores locally, and uploads/queues for Supabase.
   Future<Specimen> importImageBytes({
     required String fileName,
     required Uint8List bytes,
@@ -281,18 +286,6 @@ class HybridIdentificationRepository implements IdentificationRepository {
         dark = mlRes.dark;
         detections = mlRes.detections;
       }
-    }
-
-    if (detections.isEmpty) {
-      // Lightweight on-device fallback candidate box centered in field of view.
-      detections = [
-        Detection(
-          id: newUuid(),
-          rect: const Rect.fromLTRB(0.20, 0.24, 0.78, 0.72),
-          kind: BoxKind.ai,
-          confidence: 0.81,
-        ),
-      ];
     }
 
     final worms = [
@@ -341,7 +334,7 @@ class HybridIdentificationRepository implements IdentificationRepository {
     return specimen;
   }
 
-  Future<Uint8List?> _readSpecimenBytes(Specimen s) async {
+  Future<Uint8List?> readSpecimenBytes(Specimen s) async {
     final local = s.localPath;
     if (local != null && local.isNotEmpty) {
       final f = File(local);
@@ -381,7 +374,7 @@ class HybridIdentificationRepository implements IdentificationRepository {
     var signedUrl = specimen.imageUrl;
 
     try {
-      final rawBytes = bytes ?? await _readSpecimenBytes(specimen);
+      final rawBytes = bytes ?? await readSpecimenBytes(specimen);
       if (rawBytes != null && storagePath == null) {
         final dot = specimen.fileName.lastIndexOf('.');
         final ext = dot >= 0 ? specimen.fileName.substring(dot).toLowerCase() : '.jpg';
@@ -463,7 +456,7 @@ class HybridIdentificationRepository implements IdentificationRepository {
             .select()
             .eq('user_id', uid)
             .order('captured_at', ascending: false)
-            .limit(60);
+            .limit(80);
         final fetched = <Specimen>[];
         for (final raw in rows) {
           final m = Map<String, dynamic>.from(raw);
@@ -480,14 +473,9 @@ class HybridIdentificationRepository implements IdentificationRepository {
           fetched.add(specimenFromJson(m));
         }
         await cache.putSpecimens(fetched);
-      } catch (_) {
-        // Offline or transient error: serve local cache seamlessly.
-      }
+      } catch (_) {}
     }
-    final local = cache.specimens;
-    if (local.isNotEmpty) return local;
-    // Keep starter sample slides available before the user imports their first slide.
-    return _demoFallback.specimens();
+    return cache.specimens;
   }
 
   @override
@@ -498,7 +486,31 @@ class HybridIdentificationRepository implements IdentificationRepository {
     for (final r in cache.reports) {
       if (r.specimen.id == id) return r.specimen;
     }
-    return _demoFallback.specimen(id);
+    final sb = _supabaseOrNull;
+    final uid = _userId;
+    if (sb != null && uid != null && isValidUuid(id) && isOnline()) {
+      try {
+        final row = await sb
+            .from('specimens')
+            .select()
+            .eq('id', id)
+            .eq('user_id', uid)
+            .maybeSingle();
+        if (row != null) {
+          final m = Map<String, dynamic>.from(row);
+          final storagePath = m['storage_path'] as String?;
+          if (storagePath != null && storagePath.isNotEmpty) {
+            try {
+              m['image_url'] = await sb.storage.from('specimens').createSignedUrl(storagePath, 60 * 60 * 24 * 7);
+            } catch (_) {}
+          }
+          final s = specimenFromJson(m);
+          await cache.putSpecimen(s);
+          return s;
+        }
+      } catch (_) {}
+    }
+    return null;
   }
 
   @override
@@ -507,113 +519,79 @@ class HybridIdentificationRepository implements IdentificationRepository {
     final existing = cache.getDetections(specimen.id);
     if (existing != null && existing.isNotEmpty) return existing;
 
-    if (specimen.hasRealImage && isOnline()) {
-      final bytes = await _readSpecimenBytes(specimen);
+    if (isOnline()) {
+      final bytes = await readSpecimenBytes(specimen);
       if (bytes != null) {
         final mlRes = await mlClient.detect(imageBytes: bytes, fileName: specimen.fileName);
-        if (mlRes != null && mlRes.detections.isNotEmpty) {
+        if (mlRes != null) {
           await cache.putDetections(specimen.id, mlRes.detections);
           return mlRes.detections;
         }
       }
     }
-    final fallback = await _demoFallback.detect(specimen);
-    if (specimen.hasRealImage) {
-      await cache.putDetections(specimen.id, fallback);
-    }
-    return fallback;
+    return const [];
   }
 
   @override
   Future<BoxCheckResult> checkBox(Specimen specimen, Rect rect) async {
-    if (specimen.hasRealImage && isOnline()) {
-      final bytes = await _readSpecimenBytes(specimen);
-      if (bytes != null) {
-        final mlCheck = await mlClient.checkBox(
-          imageBytes: bytes,
-          fileName: specimen.fileName,
-          rect: rect,
-        );
-        if (mlCheck != null) return mlCheck;
-      }
+    if (!isOnline()) {
+      throw const MlModelUnavailableException(
+        'Offline: connect to the Python ML server to verify candidate boxes, or submit directly to Lab Dataset.',
+      );
     }
-    if (specimen.hasRealImage) {
-      final area = rect.width * rect.height;
-      if (area < 0.008) {
-        return const BoxCheckResult(isNematode: false, confidence: 0.78, reason: 'Debris');
-      }
-      return const BoxCheckResult(isNematode: true, confidence: 0.86);
+    final bytes = await readSpecimenBytes(specimen);
+    if (bytes == null) {
+      throw const MlModelUnavailableException('Could not read specimen image file.');
     }
-    return _demoFallback.checkBox(specimen, rect);
+    final res = await mlClient.checkBox(
+      imageBytes: bytes,
+      fileName: specimen.fileName,
+      rect: rect,
+    );
+    return res;
   }
 
   @override
   Stream<AnalysisProgress> analyze(Specimen specimen, Detection detection) async* {
-    const stages = [
-      AnalysisStage.regions,
-      AnalysisStage.head,
-      AnalysisStage.tail,
-      AnalysisStage.order,
-      AnalysisStage.family,
-      AnalysisStage.genus,
-    ];
-
-    Future<MlAnalyzeResult?>? cloudFuture;
-    if (specimen.hasRealImage && isOnline()) {
-      cloudFuture = () async {
-        final bytes = await _readSpecimenBytes(specimen);
-        if (bytes == null) return null;
-        return mlClient.analyze(
-          imageBytes: bytes,
-          fileName: specimen.fileName,
-          rect: detection.rect,
-        );
-      }();
-    }
-
-    for (final stage in stages) {
-      for (var p = 0; p <= 3; p++) {
-        if (latency != Duration.zero) await Future<void>.delayed(latency * 0.18);
-        yield AnalysisProgress(stage, p / 3);
-      }
-    }
-
-    final cloudRes = cloudFuture == null ? null : await cloudFuture;
-    if (cloudRes != null) {
-      final report = Report(
-        id: newUuid(),
-        specimen: specimen,
-        detection: detection.copyWith(kind: BoxKind.confirmed),
-        classification: cloudRes.classification,
-        traits: cloudRes.traits.isNotEmpty
-            ? cloudRes.traits
-            : reference.genus(cloudRes.classification.genus.name).traits,
-        regions: cloudRes.regions.isNotEmpty
-            ? cloudRes.regions
-            : MockIdentificationRepository.regionsFor(cloudRes.classification.genus.name),
-        createdAt: now(),
-        inferenceSource: 'cloud_python',
-        synced: false,
+    if (!isOnline()) {
+      throw const MlModelUnavailableException(
+        'Offline: connect to your Python ML server to run genus classification, or submit this slide for Scientist Review.',
       );
-      yield AnalysisProgress(AnalysisStage.done, 1, report: report);
-      return;
+    }
+    final bytes = await readSpecimenBytes(specimen);
+    if (bytes == null) {
+      throw const MlModelUnavailableException('Could not read microscope image bytes for analysis.');
     }
 
-    // On-device fallback so offline microscope labs always produce a report.
-    final targetList = reference.targetGenera;
-    final idx = int.tryParse(detection.id.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
-    final pick = targetList[(specimen.seed + idx * 5) % targetList.length];
-    final conf = 0.62 + ((specimen.seed * 31 + idx * 17) % 33) / 100;
-    final built = _demoFallback.buildReport(
+    yield const AnalysisProgress(AnalysisStage.regions, 0.3);
+    yield const AnalysisProgress(AnalysisStage.head, 0.5);
+
+    final cloudRes = await mlClient.analyze(
+      imageBytes: bytes,
+      fileName: specimen.fileName,
+      rect: detection.rect,
+    );
+
+    yield const AnalysisProgress(AnalysisStage.tail, 1.0);
+    yield const AnalysisProgress(AnalysisStage.order, 1.0);
+    yield const AnalysisProgress(AnalysisStage.family, 1.0);
+    yield const AnalysisProgress(AnalysisStage.genus, 1.0);
+
+    final report = Report(
       id: newUuid(),
       specimen: specimen,
       detection: detection.copyWith(kind: BoxKind.confirmed),
-      genus: pick.name,
-      genusConfidence: math.min(0.95, conf),
+      classification: cloudRes.classification,
+      traits: cloudRes.traits.isNotEmpty
+          ? cloudRes.traits
+          : reference.genus(cloudRes.classification.genus.name).traits,
+      regions: cloudRes.regions.isNotEmpty
+          ? cloudRes.regions
+          : MockIdentificationRepository.regionsFor(cloudRes.classification.genus.name),
       createdAt: now(),
-      withMorphometrics: !specimen.hasRealImage,
+      inferenceSource: 'cloud_python',
+      synced: false,
     );
-    final report = built.copyWith(inferenceSource: 'on_device', synced: false);
     yield AnalysisProgress(AnalysisStage.done, 1, report: report);
   }
 
@@ -639,9 +617,7 @@ class HybridIdentificationRepository implements IdentificationRepository {
           if (storagePath != null && storagePath.isNotEmpty) {
             try {
               specMap['image_url'] = await sb.storage.from('specimens').createSignedUrl(storagePath, 60 * 60 * 24 * 7);
-            } catch (_) {
-              // Ignore signed URL failure and rely on local cached file if present.
-            }
+            } catch (_) {}
           }
           final detMap = m['detections'] != null
               ? Map<String, dynamic>.from(m['detections'] as Map)
@@ -660,17 +636,9 @@ class HybridIdentificationRepository implements IdentificationRepository {
           );
         }
         await cache.putReports(fetched);
-      } catch (_) {
-        // Serve local cache when offline.
-      }
+      } catch (_) {}
     }
-    if (uid != null) {
-      // Signed-in user sees their own real cloud + offline-queued history.
-      return cache.reports;
-    }
-    final local = cache.reports;
-    if (local.isNotEmpty) return local;
-    return _demoFallback.history();
+    return cache.reports;
   }
 
   @override
@@ -715,17 +683,31 @@ class HybridIdentificationRepository implements IdentificationRepository {
         }
       } catch (_) {}
     }
-    return _demoFallback.report(id);
+    return null;
   }
 
   @override
-  Future<void> save(Report report) async {
+  Future<void> save(Report report, {bool keyDisagreed = false}) async {
     await cache.init();
+    final isFirstSave = cache.getReport(report.id) == null;
     final unsynced = report.copyWith(synced: false);
     await cache.putReport(unsynced);
 
     if (_userId != null && isOnline()) {
       final ok = await _pushReportToSupabase(unsynced);
+      if (ok && isFirstSave && trainingOptIn()) {
+        final dets = cache.getDetections(report.specimen.id) ?? [report.detection];
+        unawaited(
+          training
+              .submitUserDetectionSample(
+                specimen: report.specimen,
+                detections: dets,
+                report: report,
+                keyDisagreed: keyDisagreed,
+              )
+              .catchError((_) {}),
+        );
+      }
       if (ok) return;
     }
 
@@ -794,7 +776,6 @@ class HybridIdentificationRepository implements IdentificationRepository {
   Future<void> delete(String id) async {
     await cache.init();
     await cache.removeReport(id);
-    _demoFallback.delete(id);
 
     final sb = _supabaseOrNull;
     final uid = _userId;
@@ -816,7 +797,6 @@ class HybridIdentificationRepository implements IdentificationRepository {
     );
   }
 
-  /// Flushes all locally queued offline operations to Supabase.
   Future<int> syncPending() async {
     await cache.init();
     final sb = _supabaseOrNull;
@@ -867,14 +847,11 @@ class HybridIdentificationRepository implements IdentificationRepository {
             await cache.completeOp(op.id, SyncOpKind.deleteCalibration);
             flushed++;
         }
-      } catch (_) {
-        // Leave remaining items in queue for next connectivity check.
-      }
+      } catch (_) {}
     }
     return flushed;
   }
 
-  /// Queries `public.ml_model_releases` in Supabase for over-the-air model updates.
   Future<List<MlModelRelease>> fetchActiveModelReleases() async {
     final sb = _supabaseOrNull;
     if (sb == null || !isOnline()) return const [];

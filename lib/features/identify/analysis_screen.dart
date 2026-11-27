@@ -27,7 +27,10 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
   StreamSubscription<AnalysisProgress>? _sub;
   AnalysisProgress _p = const AnalysisProgress(AnalysisStage.regions, 0);
   Specimen? _specimen;
+  Detection? _detection;
   bool _failed = false;
+  bool _submittingQueue = false;
+  String? _errorDetail;
 
   @override
   void initState() {
@@ -41,26 +44,69 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
   }
 
   Future<void> _start() async {
-    setState(() => _failed = false);
+    setState(() {
+      _failed = false;
+      _errorDetail = null;
+    });
     final repo = ref.read(identificationRepositoryProvider);
     try {
       final s = await repo.specimen(widget.specimenId);
-      if (s == null) throw StateError('missing');
-      final dets = await repo.detect(s);
+      if (s == null) throw StateError('Specimen image not found.');
+      final dets = ref.read(localCacheProvider).getDetections(s.id) ?? await repo.detect(s);
       final d = dets.where((d) => d.id == widget.detectionId).firstOrNull ??
-          Detection(id: widget.detectionId, rect: s.worms.first.bounds, kind: BoxKind.confirmed);
+          Detection(
+            id: widget.detectionId,
+            rect: s.worms.isNotEmpty ? s.worms.first.bounds : const Rect.fromLTRB(0.15, 0.15, 0.85, 0.85),
+            kind: BoxKind.confirmed,
+          );
       if (!mounted) return;
-      setState(() => _specimen = s);
-      _sub = repo.analyze(s, d).listen((p) {
-        if (!mounted) return;
-        setState(() => _p = p);
-        if (p.report != null) {
-          ref.read(pendingReportsProvider.notifier).put(p.report!);
-          context.pushReplacement(Routes.report(p.report!.id));
-        }
-      }, onError: (_) => mounted ? setState(() => _failed = true) : null);
+      setState(() {
+        _specimen = s;
+        _detection = d;
+      });
+      _sub = repo.analyze(s, d).listen(
+        (p) {
+          if (!mounted) return;
+          setState(() => _p = p);
+          if (p.report != null) {
+            ref.read(pendingReportsProvider.notifier).put(p.report!);
+            context.pushReplacement(Routes.report(p.report!.id));
+          }
+        },
+        onError: (Object err) {
+          if (!mounted) return;
+          setState(() {
+            _failed = true;
+            _errorDetail = err.toString();
+          });
+        },
+      );
+    } catch (err) {
+      if (mounted) {
+        setState(() {
+          _failed = true;
+          _errorDetail = err.toString();
+        });
+      }
+    }
+  }
+
+  Future<void> _submitForScientistReview() async {
+    final s = _specimen;
+    if (s == null || _submittingQueue) return;
+    setState(() => _submittingQueue = true);
+    try {
+      await ref.read(trainingRepositoryProvider).submitUserDetectionSample(
+            specimen: s,
+            detections: _detection == null ? const [] : [_detection!],
+          );
+      if (!mounted) return;
+      showToast(context, 'Submitted slide to the Scientist Verification Queue.');
+      Navigator.of(context).maybePop();
     } catch (_) {
-      if (mounted) setState(() => _failed = true);
+      if (mounted) showToast(context, 'Sign in first to submit slides to the Scientist Review Queue.');
+    } finally {
+      if (mounted) setState(() => _submittingQueue = false);
     }
   }
 
@@ -89,10 +135,41 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
     return Scaffold(
       appBar: const KNavBar(title: 'Analyzing', showBack: false),
       body: failed
-          ? ErrorState(
-              title: 'Analysis stopped',
-              message: 'Kheryne couldn’t read this specimen. Try again, or draw a tighter box around the body.',
-              onRetry: _start,
+          ? ListView(
+              padding: const EdgeInsets.all(KSpace.s24),
+              children: [
+                ErrorState(
+                  title: 'Model or server required',
+                  message: _errorDetail ??
+                      'Kheryne does not invent predictions when trained weights or the ML server are unavailable.',
+                  onRetry: _start,
+                ),
+                const SizedBox(height: KSpace.s16),
+                Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 420),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        KButton.secondary(
+                          label: 'Submit slide for scientist review',
+                          icon: KIcons.flask,
+                          expand: true,
+                          loading: _submittingQueue,
+                          onPressed: _specimen == null || _submittingQueue ? null : _submitForScientistReview,
+                        ),
+                        const SizedBox(height: KSpace.s8),
+                        KButton.tertiary(
+                          label: 'Open Lab Dataset & Review Queue',
+                          icon: KIcons.external,
+                          expand: true,
+                          onPressed: () => context.pushTo(Routes.training),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
             )
           : ListView(
               padding: const EdgeInsets.fromLTRB(KSpace.s16, KSpace.s8, KSpace.s16, KSpace.s24),

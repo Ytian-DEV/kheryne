@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/layout/app_shell.dart';
 import '../../core/models/models.dart';
@@ -8,9 +9,8 @@ import '../../core/router/routes.dart';
 import '../../core/theme/theme.dart';
 import '../../core/utils/format.dart';
 import '../../core/widgets/widgets.dart';
-import '../../mock/specimens.dart';
+import '../auth/auth_controller.dart';
 import '../scan/photo_picker_sheet.dart';
-import 'package:go_router/go_router.dart';
 
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
@@ -19,18 +19,20 @@ class HomeScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final now = ref.watch(clockProvider)();
     final settings = ref.watch(settingsProvider);
+    final auth = ref.watch(authProvider);
     final history = ref.watch(historyProvider);
     final online = ref.watch(onlineProvider) && ViewStateScope.of(context) != ViewState.offline;
+    final firstName = settings.firstNameOrNull;
 
     return LargeTitleScaffold(
-      title: '${greeting(now)}, ${settings.firstName}',
+      title: firstName == null ? greeting(now) : '${greeting(now)}, $firstName',
       subtitle: longDate(now),
       showBack: false,
       actions: [
         Padding(
           padding: const EdgeInsets.only(right: KSpace.s8),
           child: StatusChip(
-            label: online ? 'Offline ready' : 'Offline · models on device',
+            label: online ? (auth.isSignedIn ? 'Cloud synced' : 'Local mode') : 'Offline',
             icon: online ? KIcons.offlineReady : KIcons.offline,
             color: online ? context.k.success : context.k.textSecondary,
           ),
@@ -38,7 +40,7 @@ class HomeScreen extends ConsumerWidget {
       ],
       slivers: [
         const SliverToBoxAdapter(child: OfflineNotice()),
-        SliverToBoxAdapter(child: _ScanHero(now: now)),
+        const SliverToBoxAdapter(child: _ScanHero()),
         const SliverToBoxAdapter(child: SizedBox(height: KSpace.s12)),
         SliverToBoxAdapter(
           child: Row(
@@ -132,6 +134,7 @@ class HomeScreen extends ConsumerWidget {
             KListRow(title: 'Dichotomous key', leading: KIcons.key, onTap: () => context.pushTo(Routes.key())),
             KListRow(title: 'Calibrate magnification', leading: KIcons.ruler, onTap: () => context.pushTo(Routes.calibrate)),
             KListRow(title: 'Pair with computer', leading: KIcons.pair, onTap: () => context.pushTo(Routes.pairPhone)),
+            KListRow(title: 'Lab dataset & review queue', leading: KIcons.flask, onTap: () => context.pushTo(Routes.training)),
           ]),
         ),
         const SliverToBoxAdapter(child: SizedBox(height: 96)),
@@ -141,8 +144,7 @@ class HomeScreen extends ConsumerWidget {
 }
 
 class _ScanHero extends StatelessWidget {
-  const _ScanHero({required this.now});
-  final DateTime now;
+  const _ScanHero();
 
   @override
   Widget build(BuildContext context) {
@@ -155,9 +157,12 @@ class _ScanHero extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          SizedBox(
-            height: 168,
-            child: Micrograph(specimen: makeSpecimen(29, capturedAt: now, nematodes: 2), semanticLabel: 'Sample micrograph'),
+          ColoredBox(
+            color: k.container.withValues(alpha: 0.45),
+            child: const SizedBox(
+              height: 148,
+              child: Center(child: LineArtView(LineArt.phoneOnEyepiece, size: 112)),
+            ),
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(KSpace.s20, KSpace.s16, KSpace.s20, KSpace.s20),
@@ -166,7 +171,7 @@ class _ScanHero extends StatelessWidget {
               children: [
                 Text('Start live scan', style: t.title2),
                 const SizedBox(height: KSpace.s8),
-                Text('Clip your phone to the eyepiece. Kheryne marks likely nematodes while you move the slide.',
+                Text('Clip your phone to the eyepiece to capture a slide, or upload an existing micrograph below.',
                     style: t.callout.copyWith(color: k.textSecondary)),
                 const SizedBox(height: KSpace.s16),
                 KButton(label: 'Start live scan', icon: KIcons.scan, expand: true, onPressed: () => context.pushTo(Routes.scan)),

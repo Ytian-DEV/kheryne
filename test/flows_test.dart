@@ -107,7 +107,16 @@ void main() {
   testWidgets('genus names render in italics everywhere', (tester) async {
     final genera = {for (final g in philippineGenera) g.name};
     var checked = 0;
-    for (final route in ['/home', '/report/r-100', '/history', '/gallery', '/gallery/genus/Pratylenchus', '/tools/key?from=r-100', '/report/r-100/pdf']) {
+    for (final route in [
+      '/home',
+      '/report/r-100',
+      '/history',
+      '/gallery',
+      '/gallery/genus/Pratylenchus',
+      '/tools/key?from=r-100',
+      '/tools/training',
+      '/report/r-100/pdf',
+    ]) {
       await pumpApp(tester, route);
       for (final rt in tester.widgetList<RichText>(find.byType(RichText))) {
         void visit(InlineSpan span, TextStyle inherited) {
@@ -133,10 +142,24 @@ void main() {
   });
 
   testWidgets('text scaling to 130% does not overflow key screens', (tester) async {
-    for (final route in ['/home', '/report/r-107', '/history', '/settings', '/tools/key', '/auth']) {
+    for (final route in ['/home', '/report/r-107', '/history', '/settings', '/tools/key', '/tools/training', '/auth']) {
       await pumpApp(tester, route, textScale: 1.3);
       expect(tester.takeException(), isNull, reason: route);
     }
+  });
+
+  testWidgets('lab dataset & review queue switches between curation, review queue, and stats', (tester) async {
+    await pumpApp(tester, '/tools/training');
+    expect(find.text('Select a microscope slide image'), findsOneWidget);
+
+    await tester.tap(find.text('My submissions'));
+    await settle(tester);
+    expect(find.textContaining('submitted any slides yet'), findsOneWidget);
+
+    await tester.tap(find.text('Dataset stats'));
+    await settle(tester);
+    expect(find.text('TRAINING PIPELINE SUMMARY'), findsOneWidget);
+    expect(find.text('Export YOLO + Classifier Dataset'), findsOneWidget);
   });
 
   testWidgets('auth screen switches between sign in and create account and supports offline mode', (tester) async {

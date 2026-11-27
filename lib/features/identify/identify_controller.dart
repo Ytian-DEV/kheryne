@@ -17,6 +17,7 @@ class IdentifyState {
     this.tool = CanvasTool.select,
     this.loading = true,
     this.error = false,
+    this.statusMessage,
   });
 
   final Specimen? specimen;
@@ -25,6 +26,7 @@ class IdentifyState {
   final CanvasTool tool;
   final bool loading;
   final bool error;
+  final String? statusMessage;
 
   Detection? get selected => detections.where((d) => d.id == selectedId).firstOrNull;
   int get detectedCount => detections.where((d) => !d.id.startsWith('u')).length;
@@ -46,6 +48,8 @@ class IdentifyState {
     CanvasTool? tool,
     bool? loading,
     bool? error,
+    String? statusMessage,
+    bool clearStatus = false,
   }) =>
       IdentifyState(
         specimen: specimen ?? this.specimen,
@@ -54,6 +58,7 @@ class IdentifyState {
         tool: tool ?? this.tool,
         loading: loading ?? this.loading,
         error: error ?? this.error,
+        statusMessage: clearStatus ? null : (statusMessage ?? this.statusMessage),
       );
 }
 
@@ -112,18 +117,26 @@ class IdentifyController extends Notifier<IdentifyState> {
     final target = state.detections.where((d) => d.id == id).firstOrNull;
     if (s == null || target == null) return;
     _replace(target.copyWith(checking: true));
-    final res = await ref.read(identificationRepositoryProvider).checkBox(s, target.rect);
-    if (!ref.mounted) return;
-    final current = state.detections.where((d) => d.id == id).firstOrNull;
-    if (current == null) return;
-    Haptics.light();
-    _replace(Detection(
-      id: current.id,
-      rect: current.rect,
-      kind: res.isNematode ? BoxKind.confirmed : BoxKind.rejected,
-      confidence: res.confidence,
-      rejectReason: res.reason,
-    ));
+    try {
+      final res = await ref.read(identificationRepositoryProvider).checkBox(s, target.rect);
+      if (!ref.mounted) return;
+      final current = state.detections.where((d) => d.id == id).firstOrNull;
+      if (current == null) return;
+      Haptics.light();
+      state = state.copyWith(clearStatus: true);
+      _replace(Detection(
+        id: current.id,
+        rect: current.rect,
+        kind: res.isNematode ? BoxKind.confirmed : BoxKind.rejected,
+        confidence: res.confidence,
+        rejectReason: res.reason,
+      ));
+    } catch (e) {
+      if (!ref.mounted) return;
+      final current = state.detections.where((d) => d.id == id).firstOrNull;
+      if (current != null) _replace(current.copyWith(checking: false));
+      state = state.copyWith(statusMessage: e.toString());
+    }
   }
 
   void _replace(Detection d) =>

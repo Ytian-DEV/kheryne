@@ -112,4 +112,7 @@ async def analyze(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     rect = _parse_rect(left, top, right, bottom)
-    return engine.analyze(bgr, rect)
+    try:
+        return engine.analyze(bgr, rect)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc

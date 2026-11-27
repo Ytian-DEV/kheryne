@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/models/models.dart';
+import '../../core/providers.dart';
 import '../../core/router/routes.dart';
 import '../../core/theme/theme.dart';
 import '../../core/widgets/widgets.dart';
@@ -62,6 +63,23 @@ class _IdentificationScreenState extends ConsumerState<IdentificationScreen> {
         title: 'Identify',
         subtitle: st.specimen == null ? null : '${st.specimen!.fileName} · ${st.specimen!.objective}× objective',
         actions: [
+          KIconButton(
+            icon: KIcons.flask,
+            label: 'Submit slide to review queue',
+            onPressed: st.specimen == null
+                ? null
+                : () async {
+                    try {
+                      await ref.read(trainingRepositoryProvider).submitUserDetectionSample(
+                            specimen: st.specimen!,
+                            detections: st.detections,
+                          );
+                      if (context.mounted) showToast(context, 'Submitted slide to Scientist Review Queue.');
+                    } catch (_) {
+                      if (context.mounted) showToast(context, 'Sign in first to submit slides.');
+                    }
+                  },
+          ),
           KIconButton(
             icon: KIcons.adjust,
             label: 'Adjust image',
@@ -134,6 +152,17 @@ class _IdentificationScreenState extends ConsumerState<IdentificationScreen> {
                                   ),
                                 ),
                               ),
+                              if (st.statusMessage != null)
+                                Positioned(
+                                  left: KSpace.s12,
+                                  right: KSpace.s12,
+                                  top: KSpace.s12,
+                                  child: StatusBanner(
+                                    title: st.statusMessage!,
+                                    tone: BannerTone.warning,
+                                    onDark: true,
+                                  ),
+                                ),
                               if (popover != null) _popoverLayer(popover, c.biggest),
                             ],
                           );

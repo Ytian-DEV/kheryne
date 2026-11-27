@@ -7,6 +7,16 @@ import 'package:http/http.dart' as http;
 import '../models/models.dart';
 import '../models/serialization.dart';
 
+/// Thrown when classification or verification is requested but neither a
+/// reachable Python ML server nor trained ONNX weights are available.
+class MlModelUnavailableException implements Exception {
+  const MlModelUnavailableException(this.message);
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
 class MlServerHealth {
   const MlServerHealth({
     required this.reachable,
@@ -19,6 +29,8 @@ class MlServerHealth {
   final String detectorEngine;
   final String classifierEngine;
   final String modelVersion;
+
+  bool get classifierReady => reachable && classifierEngine == 'onnx';
 }
 
 class MlDetectResult {
@@ -79,9 +91,9 @@ class MlServerClient {
       final body = jsonDecode(resp.body) as Map<String, dynamic>;
       return MlServerHealth(
         reachable: true,
-        detectorEngine: body['detector_engine'] as String? ?? 'opencv',
-        classifierEngine: body['classifier_engine'] as String? ?? 'opencv',
-        modelVersion: body['model_version'] as String? ?? '2.3.0',
+        detectorEngine: body['detector_engine'] as String? ?? 'opencv-morphological',
+        classifierEngine: body['classifier_engine'] as String? ?? 'untrained',
+        modelVersion: body['model_version'] as String? ?? '—',
       );
     } catch (_) {
       return const MlServerHealth(
@@ -124,11 +136,12 @@ class MlServerClient {
     }
   }
 
-  Future<BoxCheckResult?> checkBox({
+  Future<BoxCheckResult> checkBox({
     required Uint8List imageBytes,
     required String fileName,
     required Rect rect,
   }) async {
+    http.StreamedResponse streamed;
     try {
       final req = http.MultipartRequest('POST', _uri('/v1/check-box'))
         ..headers.addAll(_headers())
@@ -137,24 +150,30 @@ class MlServerClient {
         ..fields['right'] = rect.right.clamp(0.0, 1.0).toString()
         ..fields['bottom'] = rect.bottom.clamp(0.0, 1.0).toString()
         ..files.add(http.MultipartFile.fromBytes('image', imageBytes, filename: fileName));
-      final streamed = await req.send().timeout(const Duration(seconds: 10));
-      if (streamed.statusCode != 200) return null;
-      final body = jsonDecode(await streamed.stream.bytesToString()) as Map<String, dynamic>;
-      return BoxCheckResult(
-        isNematode: body['is_nematode'] as bool? ?? false,
-        confidence: (body['confidence'] as num? ?? 0.78).toDouble(),
-        reason: body['reason'] as String?,
-      );
+      streamed = await req.send().timeout(const Duration(seconds: 10));
     } catch (_) {
-      return null;
+      throw const MlModelUnavailableException(
+        'Python ML server is unreachable. Start the server or configure its URL in Settings → Models.',
+      );
     }
+
+    if (streamed.statusCode != 200) {
+      throw MlModelUnavailableException('ML server returned status ${streamed.statusCode} while checking box.');
+    }
+    final body = jsonDecode(await streamed.stream.bytesToString()) as Map<String, dynamic>;
+    return BoxCheckResult(
+      isNematode: body['is_nematode'] as bool? ?? false,
+      confidence: (body['confidence'] as num? ?? 0.80).toDouble(),
+      reason: body['reason'] as String?,
+    );
   }
 
-  Future<MlAnalyzeResult?> analyze({
+  Future<MlAnalyzeResult> analyze({
     required Uint8List imageBytes,
     required String fileName,
     required Rect rect,
   }) async {
+    http.StreamedResponse streamed;
     try {
       final req = http.MultipartRequest('POST', _uri('/v1/analyze'))
         ..headers.addAll(_headers())
@@ -163,24 +182,39 @@ class MlServerClient {
         ..fields['right'] = rect.right.clamp(0.0, 1.0).toString()
         ..fields['bottom'] = rect.bottom.clamp(0.0, 1.0).toString()
         ..files.add(http.MultipartFile.fromBytes('image', imageBytes, filename: fileName));
-      final streamed = await req.send().timeout(const Duration(seconds: 20));
-      if (streamed.statusCode != 200) return null;
-      final body = jsonDecode(await streamed.stream.bytesToString()) as Map<String, dynamic>;
-      final rawTraits = body['traits'] as List<dynamic>? ?? const <dynamic>[];
-      final rawRegions = body['regions'] as Map<String, dynamic>? ?? const <String, dynamic>{};
-      return MlAnalyzeResult(
-        classification: classificationFromJson(Map<String, dynamic>.from(body['classification'] as Map)),
-        traits: [
-          for (final t in rawTraits) traitFromJson(Map<String, dynamic>.from(t as Map)),
-        ],
-        regions: {
-          for (final e in rawRegions.entries)
-            parseRegion(e.key): rectFromJson(Map<String, dynamic>.from(e.value as Map)),
-        },
-        modelVersion: body['model_version'] as String? ?? '2.3.0',
-      );
+      streamed = await req.send().timeout(const Duration(seconds: 20));
     } catch (_) {
-      return null;
+      throw const MlModelUnavailableException(
+        'Cannot reach the Python ML server. Start the ML server or configure its URL in Settings → Models, or submit this slide to the Scientist Review Queue.',
+      );
     }
+
+    final rawBody = await streamed.stream.bytesToString();
+    if (streamed.statusCode == 503) {
+      var detail = 'Trained genus classifier weights (classifier.onnx) are not loaded on the ML server yet.';
+      try {
+        final errJson = jsonDecode(rawBody) as Map<String, dynamic>;
+        if (errJson['detail'] is String) detail = errJson['detail'] as String;
+      } catch (_) {}
+      throw MlModelUnavailableException(detail);
+    }
+    if (streamed.statusCode != 200) {
+      throw MlModelUnavailableException('ML server error (${streamed.statusCode}).');
+    }
+
+    final body = jsonDecode(rawBody) as Map<String, dynamic>;
+    final rawTraits = body['traits'] as List<dynamic>? ?? const <dynamic>[];
+    final rawRegions = body['regions'] as Map<String, dynamic>? ?? const <String, dynamic>{};
+    return MlAnalyzeResult(
+      classification: classificationFromJson(Map<String, dynamic>.from(body['classification'] as Map)),
+      traits: [
+        for (final t in rawTraits) traitFromJson(Map<String, dynamic>.from(t as Map)),
+      ],
+      regions: {
+        for (final e in rawRegions.entries)
+          parseRegion(e.key): rectFromJson(Map<String, dynamic>.from(e.value as Map)),
+      },
+      modelVersion: body['model_version'] as String? ?? '—',
+    );
   }
 }

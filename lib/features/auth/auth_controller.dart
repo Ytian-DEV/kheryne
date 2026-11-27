@@ -15,6 +15,7 @@ import '../../mock/taxonomy.dart';
 class AuthViewState {
   const AuthViewState({
     this.user,
+    this.role = 'user',
     this.institution = 'Visayas State University',
     this.busy = false,
     this.errorMessage,
@@ -22,17 +23,25 @@ class AuthViewState {
   });
 
   final User? user;
+  final String role;
   final String institution;
   final bool busy;
   final String? errorMessage;
   final String? infoMessage;
 
   bool get isSignedIn => user != null;
+  bool get isScientistOrOwner => role == 'scientist' || role == 'owner';
+  String get roleLabel => switch (role) {
+        'owner' => 'Owner',
+        'scientist' => 'Scientist',
+        _ => 'Researcher',
+      };
   String? get email => user?.email;
 
   AuthViewState copyWith({
     User? user,
     bool clearUser = false,
+    String? role,
     String? institution,
     bool? busy,
     String? errorMessage,
@@ -42,6 +51,7 @@ class AuthViewState {
   }) =>
       AuthViewState(
         user: clearUser ? null : (user ?? this.user),
+        role: role ?? this.role,
         institution: institution ?? this.institution,
         busy: busy ?? this.busy,
         errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
@@ -88,14 +98,20 @@ class AuthController extends Notifier<AuthViewState> {
       if (profile != null) {
         final fullName = profile['full_name'] as String?;
         final inst = profile['institution'] as String?;
+        final role = profile['role'] as String? ?? 'user';
         final prefSys = profile['preferred_system'] as String?;
         final scanDark = profile['scan_always_dark'] as bool?;
-        state = state.copyWith(institution: inst ?? 'Visayas State University');
+        final optIn = profile['training_opt_in'] as bool?;
+        state = state.copyWith(
+          role: role,
+          institution: inst ?? 'Visayas State University',
+        );
         ref.read(settingsProvider.notifier).update(
               (s) => s.copyWith(
                 userName: (fullName != null && fullName.trim().isNotEmpty) ? fullName.trim() : s.userName,
                 system: prefSys == 'classic' ? ClassificationSystem.classic : ClassificationSystem.nemys2026,
                 scanAlwaysDark: scanDark ?? s.scanAlwaysDark,
+                trainingOptIn: optIn ?? s.trainingOptIn,
               ),
             );
       }
@@ -229,6 +245,7 @@ class AuthController extends Notifier<AuthViewState> {
         'institution': (institution ?? state.institution).trim(),
         'preferred_system': ref.read(settingsProvider).system.name,
         'scan_always_dark': ref.read(settingsProvider).scanAlwaysDark,
+        'training_opt_in': ref.read(settingsProvider).trainingOptIn,
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       });
     } catch (_) {}

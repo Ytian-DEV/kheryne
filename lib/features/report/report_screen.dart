@@ -88,13 +88,11 @@ class ReportBody extends ConsumerWidget {
           KListRow(title: 'Image', value: report.specimen.fileName),
           KListRow(title: 'Objective', value: '${report.specimen.objective}×'),
           KListRow(title: 'Identified', value: '${relative(report.createdAt, now)} · ${timeOnly(report.createdAt)}'),
-          if (report.crop != null) KListRow(title: 'Crop', value: report.crop),
-          if (report.sampleCode != null) KListRow(title: 'Sample', value: report.sampleCode),
+          if (report.crop != null && report.crop!.isNotEmpty) KListRow(title: 'Crop', value: report.crop),
+          if (report.sampleCode != null && report.sampleCode!.isNotEmpty) KListRow(title: 'Sample', value: report.sampleCode),
         ]),
-        if (showNotes) ...[
-          const SizedBox(height: KSpace.s24),
-          _Notes(report: report),
-        ],
+        const SizedBox(height: KSpace.s24),
+        _SampleMetadataEditor(report: report),
         const SizedBox(height: KSpace.s20),
         Text(disclaimer, style: t.caption, textAlign: TextAlign.center),
       ],
@@ -145,35 +143,97 @@ class _Actions extends ConsumerWidget {
   }
 }
 
-class _Notes extends StatefulWidget {
-  const _Notes({required this.report});
+class _SampleMetadataEditor extends ConsumerStatefulWidget {
+  const _SampleMetadataEditor({required this.report});
   final Report report;
 
   @override
-  State<_Notes> createState() => _NotesState();
+  ConsumerState<_SampleMetadataEditor> createState() => _SampleMetadataEditorState();
 }
 
-class _NotesState extends State<_Notes> {
-  late final _c = TextEditingController(text: widget.report.notes);
+class _SampleMetadataEditorState extends ConsumerState<_SampleMetadataEditor> {
+  late final _crop = TextEditingController(text: widget.report.crop ?? '');
+  late final _code = TextEditingController(text: widget.report.sampleCode ?? '');
+  late final _notes = TextEditingController(text: widget.report.notes);
+  bool _saving = false;
+  bool _dirty = false;
 
   @override
   void dispose() {
-    _c.dispose();
+    _crop.dispose();
+    _code.dispose();
+    _notes.dispose();
     super.dispose();
+  }
+
+  Future<void> _saveDetails() async {
+    setState(() => _saving = true);
+    final updated = widget.report.copyWith(
+      crop: _crop.text.trim().isEmpty ? null : _crop.text.trim(),
+      sampleCode: _code.text.trim().isEmpty ? null : _code.text.trim(),
+      notes: _notes.text.trim(),
+    );
+    ref.read(pendingReportsProvider.notifier).put(updated);
+    await ref.read(identificationRepositoryProvider).save(updated);
+    ref.invalidate(historyProvider);
+    ref.invalidate(reportProvider(updated.id));
+    if (!mounted) return;
+    setState(() {
+      _saving = false;
+      _dirty = false;
+    });
+    showToast(context, 'Saved sample details and notes.');
   }
 
   @override
   Widget build(BuildContext context) => Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text('NOTES', style: context.t.sectionHeader),
+          Text('SAMPLE DETAILS & NOTES', style: context.t.sectionHeader),
           const SizedBox(height: KSpace.s8),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _crop,
+                  onChanged: (_) => setState(() => _dirty = true),
+                  decoration: const InputDecoration(
+                    labelText: 'Host crop (e.g. Banana, Rice)',
+                    prefixIcon: Icon(KIcons.plant, size: KSize.icon),
+                  ),
+                ),
+              ),
+              const SizedBox(width: KSpace.s12),
+              Expanded(
+                child: TextField(
+                  controller: _code,
+                  onChanged: (_) => setState(() => _dirty = true),
+                  decoration: const InputDecoration(
+                    labelText: 'Sample code',
+                    prefixIcon: Icon(KIcons.flask, size: KSize.icon),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: KSpace.s12),
           TextField(
-            controller: _c,
+            controller: _notes,
             minLines: 3,
             maxLines: 6,
+            onChanged: (_) => setState(() => _dirty = true),
             decoration: const InputDecoration(hintText: 'Add notes about the sample, site or slide'),
           ),
+          if (_dirty) ...[
+            const SizedBox(height: KSpace.s12),
+            KButton.secondary(
+              label: 'Save sample details',
+              icon: KIcons.save,
+              expand: true,
+              loading: _saving,
+              onPressed: _saving ? null : _saveDetails,
+            ),
+          ],
         ],
       );
 }

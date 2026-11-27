@@ -162,7 +162,48 @@ class _ReportTab extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final k = context.k;
     final t = context.t;
-    final run = ref.watch(workspaceProvider).runs[specimen.id];
+    final ws = ref.watch(workspaceProvider);
+    final run = ws.runs[specimen.id];
+    if (ws.lastError != null && run == null) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          StatusBanner(
+            title: 'Model or ML server required',
+            message: ws.lastError,
+            tone: BannerTone.warning,
+            icon: KIcons.warning,
+          ),
+          const SizedBox(height: KSpace.s12),
+          KButton.secondary(
+            label: 'Submit slide to Scientist Review Queue',
+            icon: KIcons.flask,
+            expand: true,
+            size: KButtonSize.compact,
+            onPressed: () async {
+              final dets = ref.read(identifyControllerProvider(specimen.id)).detections;
+              try {
+                await ref.read(trainingRepositoryProvider).submitUserDetectionSample(
+                      specimen: specimen,
+                      detections: dets,
+                    );
+                if (context.mounted) showToast(context, 'Submitted slide to Scientist Review Queue.');
+              } catch (_) {
+                if (context.mounted) showToast(context, 'Sign in first to submit slides.');
+              }
+            },
+          ),
+          const SizedBox(height: KSpace.s8),
+          KButton.tertiary(
+            label: 'Open Lab Dataset & Review Queue',
+            icon: KIcons.external,
+            expand: true,
+            size: KButtonSize.compact,
+            onPressed: () => context.pushTo(Routes.training),
+          ),
+        ],
+      );
+    }
     if (run == null) {
       return Column(children: [
         const SizedBox(height: KSpace.s24),

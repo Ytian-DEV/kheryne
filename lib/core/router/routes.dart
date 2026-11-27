@@ -13,6 +13,7 @@ abstract final class Routes {
   static const live = '/live';
   static const batchDesktop = '/batch';
   static const keyDesktop = '/key';
+  static const trainingDesktop = '/dataset';
 
   // Nested in branches.
   static String historyDetail(String id) => '/history/$id';
@@ -39,6 +40,7 @@ abstract final class Routes {
   static const calibrate = '/calibrate';
   static String key({String? fromReport}) => fromReport == null ? '/tools/key' : '/tools/key?from=$fromReport';
   static const batch = '/tools/batch';
+  static const training = '/tools/training';
   static const pairPhone = '/pair-phone';
   static String compare(String specimenId, String genus) => '/compare/$specimenId/$genus';
   static const import = '/import';
