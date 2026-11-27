@@ -2,7 +2,14 @@
 
 Apple-level craft in the visual language (large titles, inset grouped lists, sheets with detents, calm hierarchy) with native behaviour on each platform (Android back gesture and edge-to-edge; Windows shortcuts, hover, right-click, resizable panels).
 
-Figma: **Kheryne — UI design** (`https://www.figma.com/design/KWcNyL3Ehh9ayQ09f7QB1n`). It holds the colour variables (Light/Dark modes), spacing and radius variables, the core components (KButton, ConfidencePill, DetectionBox, ListRow) and the reference frames for Android Home, Live Scan, Identification Mode, Report and the Windows Workspace. The code is the source of truth for every other screen; see `docs/screenshots/`.
+Figma: **Kheryne — UI design** (`https://www.figma.com/design/KWcNyL3Ehh9ayQ09f7QB1n`). Every screen in the app is designed there, built from the same tokens:
+
+- **Foundations:** colour variables (Light/Dark modes), spacing and radius variables.
+- **Components:** KButton, ConfidencePill, DetectionBox (all four states), ListRow.
+- **Android page:** Home, Scan + Identify, Report, Onboarding, Capture, Edit & analyze, Morphometrics, Dichotomous key, Batch, History (including swipe actions), Reference gallery, Export, Settings (with models, calibration, privacy and about), Pair with computer, and States (loading, empty, no results, error, offline). Each screen comes as a light frame and a dark frame; camera screens are dark only.
+- **Windows page:** Workspace, Import, Live (phone) (pairing code, connecting, streaming, error), Compare, Batch, History, Reference gallery, Dichotomous key, Settings and Full report, in light and dark.
+
+`docs/screenshots/` holds the matching renders of the built app.
 
 ## Tokens (`lib/core/theme/`)
 
