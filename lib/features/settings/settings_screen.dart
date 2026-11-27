@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/config/app_config.dart';
 import '../../core/layout/app_shell.dart';
 import '../../core/layout/form_factor.dart';
 import '../../core/providers.dart';
@@ -10,6 +11,7 @@ import '../../core/theme/theme.dart';
 import '../../core/utils/format.dart';
 import '../../core/widgets/widgets.dart';
 import '../../mock/taxonomy.dart';
+import '../auth/auth_controller.dart';
 
 /// Developer tools (screen gallery, simulate offline) unlock after tapping
 /// the version five times in About.
@@ -30,6 +32,8 @@ class SettingsScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final s = ref.watch(settingsProvider);
     final c = ref.read(settingsProvider.notifier);
+    final auth = ref.watch(authProvider);
+    final pendingCount = AppConfig.supabaseReady ? ref.watch(localCacheProvider).pendingCount : 0;
     final dev = ref.watch(devUnlockedProvider);
     final online = ref.watch(onlineProvider);
     final desktop = FormFactor.of(context).isDesktop;
@@ -42,6 +46,59 @@ class SettingsScreen extends ConsumerWidget {
       slivers: [
         SliverList.list(children: [
           const OfflineNotice(),
+          KListSection(
+            header: 'ACCOUNT & CLOUD SYNC',
+            footer: auth.isSignedIn
+                ? 'Reports, micrographs, notes and calibrations sync automatically across your phone and computer.'
+                : 'Sign in to back up reports and micrographs to Supabase and sync between Android and Windows.',
+            children: [
+              if (auth.isSignedIn) ...[
+                KListRow(
+                  title: auth.email ?? s.userName,
+                  subtitle: pendingCount > 0
+                      ? '${auth.institution} · $pendingCount item${pendingCount == 1 ? '' : 's'} queued offline'
+                      : '${auth.institution} · Synced',
+                  leading: KIcons.user,
+                  chevron: false,
+                ),
+                KListRow(
+                  title: 'Sync now',
+                  leading: KIcons.retry,
+                  value: pendingCount > 0 ? '$pendingCount pending' : 'Up to date',
+                  onTap: () async {
+                    final hybrid = ref.read(hybridRepositoryProvider);
+                    final count = await hybrid?.syncPending() ?? 0;
+                    await ref.read(cloudReferenceRepositoryProvider)?.refreshFromCloud();
+                    ref.invalidate(historyProvider);
+                    ref.invalidate(specimensProvider);
+                    if (context.mounted) {
+                      showToast(context, count > 0 ? 'Synced $count queued item${count == 1 ? '' : 's'}.' : 'Everything is up to date.');
+                    }
+                  },
+                ),
+                KListRow(
+                  title: 'Sign out',
+                  leading: KIcons.close,
+                  leadingColor: context.k.error,
+                  chevron: false,
+                  onTap: () async {
+                    await ref.read(authProvider.notifier).signOut();
+                    if (context.mounted) showToast(context, 'Signed out. Local offline scans remain on this device.');
+                  },
+                ),
+              ] else ...[
+                KListRow(
+                  title: 'Sign in or create account',
+                  subtitle: pendingCount > 0
+                      ? '$pendingCount offline scan${pendingCount == 1 ? '' : 's'} ready to sync after sign-in'
+                      : 'Email & password or Google Sign-In',
+                  leading: KIcons.user,
+                  onTap: () => context.pushTo(Routes.auth),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: KSpace.s24),
           KListSection(
             header: 'APPEARANCE',
             footer: 'Live Scan and the Workspace stay dark for dim labs unless you turn this off.',
@@ -106,7 +163,7 @@ class SettingsScreen extends ConsumerWidget {
             header: 'GENERAL',
             children: [
               KListRow(title: 'Language', leading: KIcons.language, value: s.language, onTap: () => _pickLanguage(context, ref)),
-              KListRow(title: 'Name on reports', leading: KIcons.user, value: s.userName),
+              KListRow(title: 'Name on reports', leading: KIcons.user, value: s.userName, onTap: () => _editName(context, ref)),
               KListRow(title: 'Privacy', leading: KIcons.shield, onTap: () => context.goTo(Routes.settingsPrivacy)),
               KListRow(title: 'About Kheryne', leading: KIcons.info, value: appVersion, onTap: () => context.goTo(Routes.settingsAbout)),
             ],
@@ -134,6 +191,42 @@ class SettingsScreen extends ConsumerWidget {
         ]),
       ],
     );
+  }
+
+  Future<void> _editName(BuildContext context, WidgetRef ref) async {
+    final current = ref.read(settingsProvider).userName;
+    final ctrl = TextEditingController(text: current);
+    final saved = await showKBottomSheet<String>(
+      context,
+      title: 'Name on reports',
+      initial: 0.42,
+      detents: const [0.42],
+      builder: (ctx, scrollCtrl) => ListView(
+        controller: scrollCtrl,
+        padding: const EdgeInsets.all(KSpace.s16),
+        children: [
+          TextField(
+            controller: ctrl,
+            autofocus: true,
+            decoration: const InputDecoration(
+              labelText: 'Full name',
+              prefixIcon: Icon(KIcons.user, size: KSize.icon),
+            ),
+            onSubmitted: (v) => Navigator.of(ctx).pop(v),
+          ),
+          const SizedBox(height: KSpace.s16),
+          KButton(
+            label: 'Save name',
+            expand: true,
+            onPressed: () => Navigator.of(ctx).pop(ctrl.text),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (saved != null && saved.trim().isNotEmpty) {
+      await ref.read(authProvider.notifier).updateProfile(fullName: saved.trim());
+    }
   }
 
   Future<void> _pickSystem(BuildContext context, WidgetRef ref) async {
@@ -165,7 +258,10 @@ class SettingsScreen extends ConsumerWidget {
         ],
       ),
     );
-    if (picked != null) ref.read(settingsProvider.notifier).update((x) => x.copyWith(system: picked));
+    if (picked != null) {
+      ref.read(settingsProvider.notifier).update((x) => x.copyWith(system: picked));
+      await ref.read(authProvider.notifier).updateProfile();
+    }
   }
 
   Future<void> _pickLanguage(BuildContext context, WidgetRef ref) => showKBottomSheet<void>(
@@ -186,11 +282,101 @@ class SettingsScreen extends ConsumerWidget {
       );
 }
 
-class ModelsScreen extends ConsumerWidget {
+class ModelsScreen extends ConsumerStatefulWidget {
   const ModelsScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ModelsScreen> createState() => _ModelsScreenState();
+}
+
+class _ModelsScreenState extends ConsumerState<ModelsScreen> {
+  bool _checkingUpdates = false;
+  bool _checkingServer = false;
+  String? _serverStatus;
+
+  Future<void> _checkUpdates() async {
+    final hybrid = ref.read(hybridRepositoryProvider);
+    if (hybrid == null) {
+      showToast(context, 'You have the latest models.');
+      return;
+    }
+    setState(() => _checkingUpdates = true);
+    final releases = await hybrid.fetchActiveModelReleases();
+    if (!mounted) return;
+    setState(() => _checkingUpdates = false);
+    if (releases.isEmpty) {
+      showToast(context, 'You have the latest models.');
+      return;
+    }
+    final latestVersion = releases.first.version;
+    final totalSize = releases.fold<double>(0, (sum, r) => sum + r.sizeMb);
+    final current = ref.read(settingsProvider).modelVersion;
+    if (latestVersion != current) {
+      ref.read(settingsProvider.notifier).update(
+            (s) => s.copyWith(
+              modelVersion: latestVersion,
+              modelSizeMb: totalSize > 0 ? double.parse(totalSize.toStringAsFixed(1)) : s.modelSizeMb,
+            ),
+          );
+      showToast(context, 'Updated model metadata to v$latestVersion.');
+    } else {
+      showToast(context, 'Models v$current are up to date.');
+    }
+  }
+
+  Future<void> _testServer() async {
+    setState(() => _checkingServer = true);
+    final health = await ref.read(mlServerClientProvider).checkHealth();
+    if (!mounted) return;
+    setState(() {
+      _checkingServer = false;
+      _serverStatus = health.reachable
+          ? 'Connected · ${health.detectorEngine} / ${health.classifierEngine} (v${health.modelVersion})'
+          : 'Unreachable · using on-device engine';
+    });
+  }
+
+  Future<void> _editServerUrl() async {
+    final current = ref.read(settingsProvider).mlServerUrl;
+    final ctrl = TextEditingController(text: current);
+    final saved = await showKBottomSheet<String>(
+      context,
+      title: 'Python ML server URL',
+      initial: 0.45,
+      detents: const [0.45],
+      builder: (ctx, scrollCtrl) => ListView(
+        controller: scrollCtrl,
+        padding: const EdgeInsets.all(KSpace.s16),
+        children: [
+          TextField(
+            controller: ctrl,
+            autofocus: true,
+            keyboardType: TextInputType.url,
+            decoration: const InputDecoration(
+              labelText: 'Server URL (local or Hugging Face Space)',
+              hintText: 'https://your-space.hf.space',
+              prefixIcon: Icon(KIcons.globe, size: KSize.icon),
+            ),
+            onSubmitted: (v) => Navigator.of(ctx).pop(v),
+          ),
+          const SizedBox(height: KSpace.s16),
+          KButton(
+            label: 'Save URL',
+            expand: true,
+            onPressed: () => Navigator.of(ctx).pop(ctrl.text),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (saved != null && saved.trim().isNotEmpty) {
+      ref.read(settingsProvider.notifier).update((s) => s.copyWith(mlServerUrl: saved.trim()));
+      await _testServer();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final s = ref.watch(settingsProvider);
     final online = ref.watch(onlineProvider) && ViewStateScope.of(context) != ViewState.offline;
     final now = ref.watch(clockProvider)();
@@ -201,7 +387,7 @@ class ModelsScreen extends ConsumerWidget {
         SliverList.list(children: [
           KListSection(
             header: 'ON THIS DEVICE',
-            footer: 'Identification runs entirely on this device. No images are uploaded.',
+            footer: 'Live Scan and offline labs run on this device. When online, Kheryne can verify crops with your Python ML server.',
             children: [
               const KListRow(title: 'Nematode detector', subtitle: 'Finds candidates in the field of view', value: '21.4 MB'),
               const KListRow(title: 'Genus classifier', subtitle: '19 genera recorded in the Philippines', value: '27.2 MB'),
@@ -214,7 +400,27 @@ class ModelsScreen extends ConsumerWidget {
             label: online ? 'Check for updates' : 'Updates need a connection',
             icon: KIcons.download,
             expand: true,
-            onPressed: online ? () => showToast(context, 'You have the latest models.') : null,
+            loading: _checkingUpdates,
+            onPressed: online && !_checkingUpdates ? _checkUpdates : null,
+          ),
+          const SizedBox(height: KSpace.s24),
+          KListSection(
+            header: 'HYBRID PYTHON ML SERVER',
+            footer: 'Deploy server/ to Hugging Face Spaces (Docker) or run locally with uvicorn on port 7860.',
+            children: [
+              KListRow(
+                title: 'Server endpoint',
+                subtitle: _serverStatus ?? s.mlServerUrl,
+                leading: KIcons.globe,
+                onTap: _editServerUrl,
+              ),
+              KListRow(
+                title: 'Check server connection',
+                leading: KIcons.cpu,
+                value: _checkingServer ? 'Checking…' : 'Test',
+                onTap: online && !_checkingServer ? _testServer : null,
+              ),
+            ],
           ),
         ]),
       ],
@@ -283,12 +489,12 @@ class PrivacyScreen extends StatelessWidget {
       slivers: [
         SliverList.list(children: [
           KCard(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [Icon(KIcons.shield, color: k.success), const SizedBox(width: KSpace.s8), Text('Your data stays on this device', style: t.headline)]),
+            Row(children: [Icon(KIcons.shield, color: k.success), const SizedBox(width: KSpace.s8), Text('Your research data stays private', style: t.headline)]),
             const SizedBox(height: KSpace.s8),
-            p('Photos, reports, notes and calibration profiles are stored only on this device. Kheryne does not upload images or results.'),
-            p('Exports (PDF, CSV, Excel) leave the device only when you share or save them yourself.'),
-            p('Pairing streams the camera view over your local Wi-Fi to your own computer. Nothing passes through a server.'),
-            p('Kheryne follows the Data Privacy Act of 2012 (Republic Act No. 10173). Names you add to reports are personal data; delete reports from History to remove them.'),
+            p('Photos, reports, notes and calibration profiles are saved locally first so you never lose work offline. When you sign in, they sync over TLS to your private Supabase account protected by PostgreSQL Row-Level Security.'),
+            p('Exports (PDF, CSV, Excel) are shared externally only when you save or send them yourself.'),
+            p('Phone-to-computer pairing streams live frames directly over your local Wi-Fi network.'),
+            p('Kheryne follows the Data Privacy Act of 2012 (Republic Act No. 10173). Deleting a report in History removes it from both this device and your cloud account.'),
           ])),
         ]),
       ],

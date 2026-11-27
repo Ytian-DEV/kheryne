@@ -24,6 +24,7 @@ abstract final class Routes {
 
   // Full screen.
   static const onboarding = '/onboarding';
+  static const auth = '/auth';
   static const scan = '/scan';
   static String zoom(String specimenId, String detectionId) => '/scan/zoom/$specimenId/$detectionId';
   static String captureReview(String specimenId) => '/capture/$specimenId';

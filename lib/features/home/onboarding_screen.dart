@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/config/app_config.dart';
 import '../../core/models/models.dart';
 import '../../core/providers.dart';
 import '../../core/router/routes.dart';
 import '../../core/theme/theme.dart';
 import '../../core/widgets/widgets.dart';
 import '../../mock/specimens.dart';
+import '../auth/auth_controller.dart';
 
 class OnboardingScreen extends ConsumerStatefulWidget {
   const OnboardingScreen({super.key, this.initialPage = 0});
@@ -28,7 +30,11 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
 
   void _finish() {
     ref.read(settingsProvider.notifier).update((s) => s.copyWith(onboarded: true));
-    context.goTo(Routes.home);
+    if (AppConfig.supabaseReady && !ref.read(authProvider).isSignedIn) {
+      context.goTo(Routes.auth);
+    } else {
+      context.goTo(Routes.home);
+    }
   }
 
   @override

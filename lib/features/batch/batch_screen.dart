@@ -1,5 +1,10 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../../core/layout/form_factor.dart';
 import '../../core/models/models.dart';
@@ -10,6 +15,13 @@ import '../../core/utils/format.dart';
 import '../../core/widgets/widgets.dart';
 import 'batch_controller.dart';
 
+const _batchImageGroup = XTypeGroup(
+  label: 'Microscope images',
+  extensions: ['jpg', 'jpeg', 'png', 'webp', 'tif', 'tiff'],
+);
+
+const _batchExts = {'.jpg', '.jpeg', '.png', '.webp', '.tif', '.tiff'};
+
 /// Pick several images, watch the queue, then review a summary and export.
 class BatchScreen extends ConsumerWidget {
   const BatchScreen({super.key, this.embedded = false});
@@ -18,11 +30,93 @@ class BatchScreen extends ConsumerWidget {
   final bool embedded;
 
   Future<void> _pick(BuildContext context, WidgetRef ref, {bool folder = false}) async {
-    final all = await ref.read(identificationRepositoryProvider).specimens();
-    ref.read(batchProvider.notifier).add(folder ? all : all.take(6).toList());
+    final hybrid = ref.read(hybridRepositoryProvider);
+    if (hybrid == null) {
+      final all = await ref.read(identificationRepositoryProvider).specimens();
+      ref.read(batchProvider.notifier).add(folder ? all : all.take(6).toList());
+      return;
+    }
+
+    try {
+      final imported = <Specimen>[];
+      if (folder) {
+        final dirPath = await getDirectoryPath(confirmButtonText: 'Select batch folder');
+        if (dirPath == null) return;
+        final entries = await Directory(dirPath)
+            .list()
+            .where((e) => e is File && _batchExts.any((ext) => e.path.toLowerCase().endsWith(ext)))
+            .cast<File>()
+            .take(50)
+            .toList();
+        for (final f in entries) {
+          final bytes = await f.readAsBytes();
+          final fileName = f.uri.pathSegments.isEmpty ? 'slide.jpg' : f.uri.pathSegments.last;
+          imported.add(
+            await hybrid.importImageBytes(
+              fileName: fileName,
+              bytes: bytes,
+              source: CaptureSource.batch,
+            ),
+          );
+        }
+      } else {
+        final files = await openFiles(acceptedTypeGroups: const [_batchImageGroup]);
+        if (files.isEmpty) return;
+        for (final f in files) {
+          final bytes = await f.readAsBytes();
+          imported.add(
+            await hybrid.importImageBytes(
+              fileName: f.name,
+              bytes: bytes,
+              source: CaptureSource.batch,
+            ),
+          );
+        }
+      }
+      if (imported.isEmpty) {
+        if (context.mounted) showToast(context, 'No supported microscope images found.');
+        return;
+      }
+      ref.invalidate(specimensProvider);
+      ref.read(batchProvider.notifier).add(imported);
+    } catch (_) {
+      if (context.mounted) showToast(context, 'Could not read the selected images.');
+    }
   }
 
-  void _export(BuildContext context, String format) => showToast(context, 'Exported batch as $format.');
+  Future<void> _export(BuildContext context, List<BatchItem> items, String format) async {
+    if (format == 'CSV') {
+      final buf = StringBuffer('File,Status,Order,Family,Genus,Confidence,CapturedAt\n');
+      for (final it in items) {
+        final r = it.report;
+        final escFile = '"${it.specimen.fileName.replaceAll('"', '""')}"';
+        final order = r?.classification.order.name ?? '';
+        final family = r?.classification.family.name ?? '';
+        final genus = r?.genus ?? '';
+        final conf = r == null ? '' : (r.classification.genus.confidence * 100).toStringAsFixed(1);
+        buf.writeln('$escFile,${it.status.name},$order,$family,$genus,$conf,${it.specimen.capturedAt.toIso8601String()}');
+      }
+      try {
+        final saveLoc = await getSaveLocation(suggestedName: 'kheryne_batch_results.csv');
+        if (saveLoc != null) {
+          final xFile = XFile.fromData(
+            utf8.encode(buf.toString()),
+            mimeType: 'text/csv',
+            name: 'kheryne_batch_results.csv',
+          );
+          await xFile.saveTo(saveLoc.path);
+          if (context.mounted) showToast(context, 'Saved CSV to ${saveLoc.path}');
+          return;
+        }
+        final docs = await getApplicationDocumentsDirectory();
+        final out = File('${docs.path}${Platform.pathSeparator}kheryne_batch_results.csv');
+        await out.writeAsString(buf.toString(), flush: true);
+        if (context.mounted) showToast(context, 'Saved CSV to ${out.path}');
+        return;
+      } catch (_) {}
+    }
+    if (context.mounted) showToast(context, 'Exported batch as $format.');
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -34,11 +128,11 @@ class BatchScreen extends ConsumerWidget {
     final actions = <Widget>[
       if (st.finished && forced != ViewState.empty) ...[
         if (desktop) ...[
-          KButton.tertiary(label: 'CSV', icon: KIcons.csv, size: KButtonSize.compact, onPressed: () => _export(context, 'CSV')),
-          KButton.tertiary(label: 'Excel', icon: KIcons.xls, size: KButtonSize.compact, onPressed: () => _export(context, 'Excel')),
-          KButton.tertiary(label: 'PDF', icon: KIcons.pdf, size: KButtonSize.compact, onPressed: () => _export(context, 'PDF')),
+          KButton.tertiary(label: 'CSV', icon: KIcons.csv, size: KButtonSize.compact, onPressed: () => _export(context, st.items, 'CSV')),
+          KButton.tertiary(label: 'Excel', icon: KIcons.xls, size: KButtonSize.compact, onPressed: () => _export(context, st.items, 'Excel')),
+          KButton.tertiary(label: 'PDF', icon: KIcons.pdf, size: KButtonSize.compact, onPressed: () => _export(context, st.items, 'PDF')),
         ] else
-          KIconButton(icon: KIcons.export, label: 'Export results', onPressed: () => _exportSheet(context)),
+          KIconButton(icon: KIcons.export, label: 'Export results', onPressed: () => _exportSheet(context, st.items)),
       ],
     ];
 
@@ -49,8 +143,14 @@ class BatchScreen extends ConsumerWidget {
       maxContentWidth: desktop ? null : 640,
       header: empty
           ? null
-          : _Progress(st: st, onStart: () => ref.read(batchProvider.notifier).start(), onCancel: () => ref.read(batchProvider.notifier).cancel(),
-              onAdd: () => _pick(context, ref), onClear: () => ref.read(batchProvider.notifier).clear(), desktop: desktop),
+          : _Progress(
+              st: st,
+              onStart: () => ref.read(batchProvider.notifier).start(),
+              onCancel: () => ref.read(batchProvider.notifier).cancel(),
+              onAdd: () => _pick(context, ref),
+              onClear: () => ref.read(batchProvider.notifier).clear(),
+              desktop: desktop,
+            ),
       slivers: [
         if (empty)
           SliverToBoxAdapter(
@@ -84,7 +184,7 @@ class BatchScreen extends ConsumerWidget {
     );
   }
 
-  void _exportSheet(BuildContext context) => showKBottomSheet<void>(
+  void _exportSheet(BuildContext context, List<BatchItem> items) => showKBottomSheet<void>(
         context,
         title: 'Export results',
         initial: 0.4,
@@ -94,14 +194,22 @@ class BatchScreen extends ConsumerWidget {
           padding: const EdgeInsets.all(KSpace.s16),
           children: [
             KListSection(children: [
-              KListRow(title: 'CSV spreadsheet', leading: KIcons.csv, onTap: () {
-                Navigator.of(ctx).pop();
-                _export(context, 'CSV');
-              }),
-              KListRow(title: 'PDF summary', leading: KIcons.pdf, onTap: () {
-                Navigator.of(ctx).pop();
-                _export(context, 'PDF');
-              }),
+              KListRow(
+                title: 'CSV spreadsheet',
+                leading: KIcons.csv,
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  _export(context, items, 'CSV');
+                },
+              ),
+              KListRow(
+                title: 'PDF summary',
+                leading: KIcons.pdf,
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  _export(context, items, 'PDF');
+                },
+              ),
             ]),
           ],
         ),

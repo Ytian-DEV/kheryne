@@ -36,6 +36,12 @@ class _GenusDetailScreenState extends ConsumerState<GenusDetailScreen> {
     final desktop = FormFactor.of(context).isDesktop;
 
     final images = <Widget>[
+      for (final url in info.referenceImageUrls)
+        Image.network(
+          url,
+          fit: BoxFit.cover,
+          errorBuilder: (_, _, _) => SpecimenPortrait(genus: info.name, seed: info.imageSeeds.first),
+        ),
       SpecimenPortrait(genus: info.name, seed: info.imageSeeds.first),
       for (final s in info.imageSeeds) Micrograph(specimen: makeSpecimen(s, capturedAt: now, nematodes: 1, withDebrisBody: false)),
     ];

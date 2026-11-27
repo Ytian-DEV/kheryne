@@ -1,11 +1,19 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../mock/mock_repository.dart';
 import '../mock/taxonomy.dart';
+import 'config/app_config.dart';
+import 'data/cloud_repositories.dart';
+import 'data/local_cache_store.dart';
+import 'data/ml_server_client.dart';
 import 'data/repositories.dart';
 import 'layout/form_factor.dart';
 import 'models/models.dart';
+import 'models/serialization.dart';
 import 'widgets/async_view.dart' show ViewState;
 
 /// Current time. Overridden with a fixed date in tests and screenshots.
@@ -13,6 +21,9 @@ final clockProvider = Provider<DateTime Function()>((ref) => DateTime.now);
 
 /// Simulated repository latency. Zero in tests.
 final latencyProvider = Provider<Duration>((ref) => const Duration(milliseconds: 450));
+
+/// Persistent offline-first store for specimens, detections, reports, and sync queue.
+final localCacheProvider = Provider<LocalCacheStore>((ref) => LocalCacheStore());
 
 class FormFactorController extends Notifier<FormFactor> {
   FormFactorController([this._initial]);
@@ -36,11 +47,57 @@ class ForcedViewState extends Notifier<ViewState?> {
 
 final forcedViewStateProvider = NotifierProvider<ForcedViewState, ViewState?>(ForcedViewState.new);
 
-final referenceRepositoryProvider = Provider<ReferenceRepository>((ref) => const MockReferenceRepository());
+/// Bumped whenever cloud taxonomy is refreshed so Gallery and Key screens rebuild.
+class TaxonomyRevision extends Notifier<int> {
+  @override
+  int build() => 0;
+  void bump() => state++;
+}
 
-final identificationRepositoryProvider = Provider<IdentificationRepository>(
-  (ref) => MockIdentificationRepository(now: ref.watch(clockProvider), latency: ref.watch(latencyProvider)),
-);
+final taxonomyRevisionProvider = NotifierProvider<TaxonomyRevision, int>(TaxonomyRevision.new);
+
+final cloudReferenceRepositoryProvider = Provider<CloudReferenceRepository?>((ref) {
+  if (!AppConfig.supabaseReady) return null;
+  final repo = CloudReferenceRepository(cache: ref.watch(localCacheProvider));
+  unawaited(
+    repo.refreshFromCloud().then((changed) {
+      if (changed) ref.read(taxonomyRevisionProvider.notifier).bump();
+    }),
+  );
+  return repo;
+});
+
+final referenceRepositoryProvider = Provider<ReferenceRepository>((ref) {
+  ref.watch(taxonomyRevisionProvider);
+  final cloud = ref.watch(cloudReferenceRepositoryProvider);
+  return cloud ?? const MockReferenceRepository();
+});
+
+final mlServerClientProvider = Provider<MlServerClient>((ref) {
+  return MlServerClient(
+    baseUrlProvider: () => ref.read(settingsProvider).mlServerUrl,
+    accessTokenProvider: () =>
+        AppConfig.supabaseReady ? Supabase.instance.client.auth.currentSession?.accessToken : null,
+  );
+});
+
+final hybridRepositoryProvider = Provider<HybridIdentificationRepository?>((ref) {
+  if (!AppConfig.supabaseReady) return null;
+  return HybridIdentificationRepository(
+    cache: ref.watch(localCacheProvider),
+    mlClient: ref.watch(mlServerClientProvider),
+    reference: ref.watch(referenceRepositoryProvider),
+    now: ref.watch(clockProvider),
+    isOnline: () => ref.read(onlineProvider),
+    latency: ref.watch(latencyProvider),
+  );
+});
+
+final identificationRepositoryProvider = Provider<IdentificationRepository>((ref) {
+  final hybrid = ref.watch(hybridRepositoryProvider);
+  if (hybrid != null) return hybrid;
+  return MockIdentificationRepository(now: ref.watch(clockProvider), latency: ref.watch(latencyProvider));
+});
 
 final historyProvider = FutureProvider<List<Report>>((ref) => ref.watch(identificationRepositoryProvider).history());
 
@@ -65,11 +122,26 @@ final reportProvider = FutureProvider.family<Report?, String>((ref, id) async {
   return ref.watch(identificationRepositoryProvider).report(id);
 });
 
-/// Mock connectivity, toggled from Settings and the screen gallery.
+/// Connectivity state (also toggled from Developer settings and the screen gallery).
 class Connectivity extends Notifier<bool> {
   @override
   bool build() => true;
-  void set(bool online) => state = online;
+  void set(bool online) {
+    state = online;
+    if (online) {
+      final hybrid = ref.read(hybridRepositoryProvider);
+      if (hybrid != null) {
+        unawaited(
+          hybrid.syncPending().then((count) {
+            if (count > 0) {
+              ref.invalidate(historyProvider);
+              ref.invalidate(specimensProvider);
+            }
+          }),
+        );
+      }
+    }
+  }
 }
 
 final onlineProvider = NotifierProvider<Connectivity, bool>(Connectivity.new);
@@ -87,6 +159,7 @@ class AppSettings {
     this.calibrations = const [],
     this.modelVersion = '2.3.0',
     this.modelSizeMb = 48.6,
+    this.mlServerUrl = AppConfig.defaultMlServerUrl,
   });
 
   final ThemeMode themeMode;
@@ -103,6 +176,7 @@ class AppSettings {
   final List<CalibrationProfile> calibrations;
   final String modelVersion;
   final double modelSizeMb;
+  final String mlServerUrl;
 
   String get firstName => userName.split(' ').first;
 
@@ -122,6 +196,9 @@ class AppSettings {
     bool? onboarded,
     String? userName,
     List<CalibrationProfile>? calibrations,
+    String? modelVersion,
+    double? modelSizeMb,
+    String? mlServerUrl,
   }) =>
       AppSettings(
         themeMode: themeMode ?? this.themeMode,
@@ -132,30 +209,174 @@ class AppSettings {
         onboarded: onboarded ?? this.onboarded,
         userName: userName ?? this.userName,
         calibrations: calibrations ?? this.calibrations,
-        modelVersion: modelVersion,
-        modelSizeMb: modelSizeMb,
+        modelVersion: modelVersion ?? this.modelVersion,
+        modelSizeMb: modelSizeMb ?? this.modelSizeMb,
+        mlServerUrl: mlServerUrl ?? this.mlServerUrl,
       );
+
+  Map<String, dynamic> toJson() => {
+        'theme_mode': themeMode.name,
+        'scan_always_dark': scanAlwaysDark,
+        'system': system.name,
+        'language': language,
+        'demo_feed': demoFeed,
+        'onboarded': onboarded,
+        'user_name': userName,
+        'model_version': modelVersion,
+        'model_size_mb': modelSizeMb,
+        'ml_server_url': mlServerUrl,
+      };
 }
 
 class SettingsController extends Notifier<AppSettings> {
   @override
   AppSettings build() {
     final now = ref.watch(clockProvider)();
-    return AppSettings(calibrations: [
-      CalibrationProfile(objective: 10, micrometresPerPixel: 1.62, savedAt: now.subtract(const Duration(days: 12)), referenceMicrometres: 1000),
-      CalibrationProfile(objective: 40, micrometresPerPixel: 0.405, savedAt: now.subtract(const Duration(days: 12)), referenceMicrometres: 200),
-    ]);
+    final cache = ref.watch(localCacheProvider);
+    final saved = cache.settingsJson;
+    final savedCals = cache.calibrations;
+
+    final defaultCals = [
+      CalibrationProfile(
+        objective: 10,
+        micrometresPerPixel: 1.62,
+        savedAt: now.subtract(const Duration(days: 12)),
+        referenceMicrometres: 1000,
+      ),
+      CalibrationProfile(
+        objective: 40,
+        micrometresPerPixel: 0.405,
+        savedAt: now.subtract(const Duration(days: 12)),
+        referenceMicrometres: 200,
+      ),
+    ];
+
+    if (saved == null) {
+      return AppSettings(calibrations: savedCals.isNotEmpty ? savedCals : defaultCals);
+    }
+
+    final modeName = saved['theme_mode'] as String? ?? 'system';
+    final themeMode = ThemeMode.values.firstWhere(
+      (m) => m.name == modeName,
+      orElse: () => ThemeMode.system,
+    );
+    final sysName = saved['system'] as String? ?? 'nemys2026';
+    final system = sysName == 'classic' ? ClassificationSystem.classic : ClassificationSystem.nemys2026;
+
+    return AppSettings(
+      themeMode: themeMode,
+      scanAlwaysDark: saved['scan_always_dark'] as bool? ?? true,
+      system: system,
+      language: saved['language'] as String? ?? 'English',
+      demoFeed: saved['demo_feed'] as bool? ?? true,
+      onboarded: saved['onboarded'] as bool? ?? false,
+      userName: saved['user_name'] as String? ?? 'Ana Dela Cruz',
+      calibrations: savedCals.isNotEmpty ? savedCals : defaultCals,
+      modelVersion: saved['model_version'] as String? ?? '2.3.0',
+      modelSizeMb: (saved['model_size_mb'] as num? ?? 48.6).toDouble(),
+      mlServerUrl: saved['ml_server_url'] as String? ?? AppConfig.defaultMlServerUrl,
+    );
   }
 
-  void update(AppSettings Function(AppSettings s) f) => state = f(state);
+  void _persist() {
+    if (!AppConfig.supabaseReady) return;
+    final cache = ref.read(localCacheProvider);
+    unawaited(cache.putSettings(state.toJson()));
+  }
 
-  void saveCalibration(CalibrationProfile p) => state = state.copyWith(
-        calibrations: [...state.calibrations.where((c) => c.objective != p.objective), p]
-          ..sort((a, b) => a.objective.compareTo(b.objective)),
+  void update(AppSettings Function(AppSettings s) f) {
+    state = f(state);
+    _persist();
+  }
+
+  void saveCalibration(CalibrationProfile p) {
+    final updated = [...state.calibrations.where((c) => c.objective != p.objective), p]
+      ..sort((a, b) => a.objective.compareTo(b.objective));
+    state = state.copyWith(calibrations: updated);
+    if (!AppConfig.supabaseReady) return;
+    final cache = ref.read(localCacheProvider);
+    unawaited(cache.putCalibrations(updated));
+    final sb = Supabase.instance.client;
+    final uid = sb.auth.currentUser?.id;
+    if (uid != null && ref.read(onlineProvider)) {
+      unawaited(
+        sb
+            .from('calibration_profiles')
+            .upsert(
+              {
+                'user_id': uid,
+                'device_label': 'Default',
+                'objective': p.objective,
+                'micrometres_per_pixel': p.micrometresPerPixel,
+                'reference_micrometres': p.referenceMicrometres,
+                'saved_at': p.savedAt.toUtc().toIso8601String(),
+              },
+              onConflict: 'user_id,device_label,objective',
+            )
+            .catchError((_) {
+          cache.enqueue(
+            PendingSyncOp(
+              id: 'cal-${p.objective}',
+              kind: SyncOpKind.upsertCalibration,
+              payload: calibrationToJson(p),
+              createdAt: DateTime.now(),
+            ),
+          );
+        }),
       );
+    } else {
+      unawaited(
+        cache.enqueue(
+          PendingSyncOp(
+            id: 'cal-${p.objective}',
+            kind: SyncOpKind.upsertCalibration,
+            payload: calibrationToJson(p),
+            createdAt: DateTime.now(),
+          ),
+        ),
+      );
+    }
+  }
 
-  void deleteCalibration(int objective) =>
-      state = state.copyWith(calibrations: state.calibrations.where((c) => c.objective != objective).toList());
+  void deleteCalibration(int objective) {
+    final updated = state.calibrations.where((c) => c.objective != objective).toList();
+    state = state.copyWith(calibrations: updated);
+    if (!AppConfig.supabaseReady) return;
+    final cache = ref.read(localCacheProvider);
+    unawaited(cache.putCalibrations(updated));
+    final sb = Supabase.instance.client;
+    final uid = sb.auth.currentUser?.id;
+    if (uid != null && ref.read(onlineProvider)) {
+      unawaited(
+        sb
+            .from('calibration_profiles')
+            .delete()
+            .eq('user_id', uid)
+            .eq('objective', objective)
+            .catchError((_) {
+          cache.enqueue(
+            PendingSyncOp(
+              id: 'cal-$objective',
+              kind: SyncOpKind.deleteCalibration,
+              payload: {'objective': objective},
+              createdAt: DateTime.now(),
+            ),
+          );
+        }),
+      );
+    } else {
+      unawaited(
+        cache.enqueue(
+          PendingSyncOp(
+            id: 'cal-$objective',
+            kind: SyncOpKind.deleteCalibration,
+            payload: {'objective': objective},
+            createdAt: DateTime.now(),
+          ),
+        ),
+      );
+    }
+  }
 }
 
 final settingsProvider = NotifierProvider<SettingsController, AppSettings>(SettingsController.new);

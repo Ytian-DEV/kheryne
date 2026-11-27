@@ -113,6 +113,7 @@ class GenusInfo {
     required this.similar,
     required this.crops,
     required this.imageSeeds,
+    this.referenceImageUrls = const [],
     this.recordedInPhilippines = false,
   });
 
@@ -125,6 +126,7 @@ class GenusInfo {
   final List<SimilarGenus> similar;
   final List<String> crops;
   final List<int> imageSeeds;
+  final List<String> referenceImageUrls;
   final bool recordedInPhilippines;
 
   bool get hasDetails => traits.isNotEmpty;
@@ -171,6 +173,9 @@ class Specimen {
     this.source = CaptureSource.upload,
     this.blurry = false,
     this.dark = false,
+    this.localPath,
+    this.imageUrl,
+    this.storagePath,
   });
 
   final String id;
@@ -184,6 +189,41 @@ class Specimen {
   final CaptureSource source;
   final bool blurry;
   final bool dark;
+
+  /// Local file path on device when imported or captured from camera.
+  final String? localPath;
+
+  /// Signed or public remote URL when stored in Supabase Storage.
+  final String? imageUrl;
+
+  /// Object path inside the `specimens` Supabase Storage bucket.
+  final String? storagePath;
+
+  bool get hasRealImage => (localPath != null && localPath!.isNotEmpty) || (imageUrl != null && imageUrl!.isNotEmpty);
+
+  Specimen copyWith({
+    int? objective,
+    List<WormShape>? worms,
+    bool? blurry,
+    bool? dark,
+    String? localPath,
+    String? imageUrl,
+    String? storagePath,
+  }) =>
+      Specimen(
+        id: id,
+        seed: seed,
+        fileName: fileName,
+        objective: objective ?? this.objective,
+        worms: worms ?? this.worms,
+        capturedAt: capturedAt,
+        source: source,
+        blurry: blurry ?? this.blurry,
+        dark: dark ?? this.dark,
+        localPath: localPath ?? this.localPath,
+        imageUrl: imageUrl ?? this.imageUrl,
+        storagePath: storagePath ?? this.storagePath,
+      );
 }
 
 /// Box states on the identification canvas.
@@ -308,6 +348,8 @@ class Report {
     this.crop,
     this.notes = '',
     this.sampleCode,
+    this.inferenceSource = 'on_device',
+    this.synced = true,
   });
 
   final String id;
@@ -323,21 +365,34 @@ class Report {
   final String? crop;
   final String notes;
   final String? sampleCode;
+  final String inferenceSource;
+  final bool synced;
 
   String get genus => classification.genus.name;
 
-  Report copyWith({String? notes, Morphometrics? morphometrics}) => Report(
+  Report copyWith({
+    Specimen? specimen,
+    String? notes,
+    Morphometrics? morphometrics,
+    String? crop,
+    String? sampleCode,
+    String? inferenceSource,
+    bool? synced,
+  }) =>
+      Report(
         id: id,
-        specimen: specimen,
+        specimen: specimen ?? this.specimen,
         detection: detection,
         classification: classification,
         traits: traits,
         regions: regions,
         createdAt: createdAt,
         morphometrics: morphometrics ?? this.morphometrics,
-        crop: crop,
+        crop: crop ?? this.crop,
         notes: notes ?? this.notes,
-        sampleCode: sampleCode,
+        sampleCode: sampleCode ?? this.sampleCode,
+        inferenceSource: inferenceSource ?? this.inferenceSource,
+        synced: synced ?? this.synced,
       );
 }
 

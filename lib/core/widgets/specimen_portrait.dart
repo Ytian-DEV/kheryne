@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -53,20 +54,35 @@ const _looks = <String, _Look>{
 /// A straightened, high-magnification rendering of one specimen, used in the
 /// report header, zoomed specimen view and trait crops. Mock imagery.
 class SpecimenPortrait extends StatelessWidget {
-  const SpecimenPortrait({super.key, required this.genus, this.seed = 1, this.crop});
+  const SpecimenPortrait({
+    super.key,
+    required this.genus,
+    this.seed = 1,
+    this.crop,
+    this.localPath,
+    this.imageUrl,
+  });
 
   final String genus;
   final int seed;
 
   /// Optional normalised crop (0..1) to zoom into one region.
   final Rect? crop;
+  final String? localPath;
+  final String? imageUrl;
 
   @override
   Widget build(BuildContext context) {
-    final painter = CustomPaint(painter: _PortraitPainter(_looks[genus] ?? const _Look(), seed));
+    final fallback = CustomPaint(painter: _PortraitPainter(_looks[genus] ?? const _Look(), seed));
+    Widget base = fallback;
+    if (localPath != null && localPath!.isNotEmpty && File(localPath!).existsSync()) {
+      base = Image.file(File(localPath!), fit: BoxFit.cover, errorBuilder: (_, _, _) => fallback);
+    } else if (imageUrl != null && imageUrl!.isNotEmpty) {
+      base = Image.network(imageUrl!, fit: BoxFit.cover, errorBuilder: (_, _, _) => fallback);
+    }
     return ClipRect(
       child: LayoutBuilder(builder: (context, c) {
-        if (crop == null) return SizedBox.expand(child: painter);
+        if (crop == null) return SizedBox.expand(child: base);
         final r = crop!;
         final scale = math.max(c.maxWidth / (780 * r.width), c.maxHeight / (300 * r.height));
         return OverflowBox(
@@ -76,7 +92,7 @@ class SpecimenPortrait extends StatelessWidget {
           child: Transform.translate(
             offset: Offset(-r.left * 780 * scale + (c.maxWidth - r.width * 780 * scale) / 2,
                 -r.top * 300 * scale + (c.maxHeight - r.height * 300 * scale) / 2),
-            child: SizedBox(width: 780 * scale, height: 300 * scale, child: painter),
+            child: SizedBox(width: 780 * scale, height: 300 * scale, child: base),
           ),
         );
       }),
