@@ -1,3 +1,6 @@
+import 'dart:io';
+
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -8,10 +11,14 @@ import '../../core/utils/format.dart';
 import '../../core/widgets/widgets.dart';
 import 'workspace_controller.dart';
 
-/// Drag-and-drop zone, file and folder pickers, and recent files.
-///
-/// The drop zone is UI only in this pass; OS drag-and-drop plugs in with
-/// the file-access layer (see README).
+const _imageGroup = XTypeGroup(
+  label: 'Microscope images',
+  extensions: ['jpg', 'jpeg', 'png', 'webp', 'tif', 'tiff'],
+);
+
+const _allowedExts = {'.jpg', '.jpeg', '.png', '.webp', '.tif', '.tiff'};
+
+/// File and folder pickers + recent files for Windows and desktop layouts.
 class ImportScreen extends ConsumerStatefulWidget {
   const ImportScreen({super.key});
 
@@ -21,13 +28,70 @@ class ImportScreen extends ConsumerStatefulWidget {
 
 class _ImportScreenState extends ConsumerState<ImportScreen> {
   bool _hover = false;
+  bool _busy = false;
 
   Future<void> _import({required bool folder}) async {
-    final all = await ref.read(identificationRepositoryProvider).specimens();
-    ref.read(workspaceProvider.notifier).importAll(folder ? all : all.skip(8).take(2).toList());
-    if (!mounted) return;
-    showToast(context, folder ? 'Imported ${all.length} images from the folder.' : 'Imported 2 images.');
-    Navigator.of(context).maybePop();
+    final hybrid = ref.read(hybridRepositoryProvider);
+    if (hybrid == null) {
+      final all = await ref.read(identificationRepositoryProvider).specimens();
+      ref.read(workspaceProvider.notifier).importAll(folder ? all : all.skip(8).take(2).toList());
+      if (!mounted) return;
+      showToast(context, folder ? 'Imported ${all.length} images from the folder.' : 'Imported 2 images.');
+      Navigator.of(context).maybePop();
+      return;
+    }
+
+    setState(() => _busy = true);
+    try {
+      final imported = <Specimen>[];
+      if (folder) {
+        final dirPath = await getDirectoryPath(confirmButtonText: 'Import folder');
+        if (dirPath == null) {
+          if (mounted) setState(() => _busy = false);
+          return;
+        }
+        final entries = await Directory(dirPath)
+            .list()
+            .where((e) => e is File && _allowedExts.any((ext) => e.path.toLowerCase().endsWith(ext)))
+            .cast<File>()
+            .take(50)
+            .toList();
+        for (final f in entries) {
+          final bytes = await f.readAsBytes();
+          final fileName = f.uri.pathSegments.isEmpty ? 'slide.jpg' : f.uri.pathSegments.last;
+          imported.add(await hybrid.importImageBytes(fileName: fileName, bytes: bytes));
+        }
+      } else {
+        final files = await openFiles(acceptedTypeGroups: const [_imageGroup]);
+        if (files.isEmpty) {
+          if (mounted) setState(() => _busy = false);
+          return;
+        }
+        for (final f in files) {
+          final bytes = await f.readAsBytes();
+          imported.add(await hybrid.importImageBytes(fileName: f.name, bytes: bytes));
+        }
+      }
+
+      if (imported.isEmpty) {
+        if (mounted) {
+          setState(() => _busy = false);
+          showToast(context, 'No supported microscope images found.');
+        }
+        return;
+      }
+
+      ref.invalidate(specimensProvider);
+      ref.read(workspaceProvider.notifier).importAll(imported);
+      if (!mounted) return;
+      showToast(context, 'Imported ${imported.length} image${imported.length == 1 ? '' : 's'}.');
+      Navigator.of(context).maybePop();
+    } catch (_) {
+      if (mounted) {
+        setState(() => _busy = false);
+        showToast(context, 'Could not import the selected files.');
+      }
+    }
   }
 
   @override
@@ -55,7 +119,10 @@ class _ImportScreenState extends ConsumerState<ImportScreen> {
                       child: AnimatedContainer(
                         duration: KMotion.of(context, KMotion.fast),
                         height: 260,
-                        decoration: BoxDecoration(color: _hover ? k.container.withValues(alpha: 0.5) : k.surface, borderRadius: KRadius.heroAll),
+                        decoration: BoxDecoration(
+                          color: _hover ? k.container.withValues(alpha: 0.5) : k.surface,
+                          borderRadius: KRadius.heroAll,
+                        ),
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
@@ -63,12 +130,21 @@ class _ImportScreenState extends ConsumerState<ImportScreen> {
                             const SizedBox(height: KSpace.s12),
                             Text('Drop micrographs or a folder here', style: t.title2),
                             const SizedBox(height: KSpace.s4),
-                            Text('JPEG, PNG or TIFF · up to 50 MB each', style: t.caption),
+                            Text('JPEG, PNG, WebP or TIFF · up to 50 MB each', style: t.caption),
                             const SizedBox(height: KSpace.s20),
                             Row(mainAxisSize: MainAxisSize.min, children: [
-                              KButton(label: 'Choose files', icon: KIcons.images, onPressed: () => _import(folder: false)),
+                              KButton(
+                                label: 'Choose files',
+                                icon: KIcons.images,
+                                loading: _busy,
+                                onPressed: _busy ? null : () => _import(folder: false),
+                              ),
                               const SizedBox(width: KSpace.s12),
-                              KButton.secondary(label: 'Choose folder', icon: KIcons.folder, onPressed: () => _import(folder: true)),
+                              KButton.secondary(
+                                label: 'Choose folder',
+                                icon: KIcons.folder,
+                                onPressed: _busy ? null : () => _import(folder: true),
+                              ),
                             ]),
                           ],
                         ),

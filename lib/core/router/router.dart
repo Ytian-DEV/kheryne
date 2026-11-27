@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../features/auth/auth_screen.dart';
 import '../../features/batch/batch_screen.dart';
 import '../../features/gallery/gallery_screen.dart';
 import '../../features/gallery/genus_detail_screen.dart';
@@ -86,6 +87,7 @@ GoRouter buildRouter({required FormFactor formFactor, String? initialLocation, r
         ],
       ),
       full(Routes.onboarding, (_) => const OnboardingScreen()),
+      full(Routes.auth, (_) => const AuthScreen()),
       full(Routes.scan, (_) => const LiveScanScreen()),
       full('/scan/zoom/:sid/:did', (s) => ZoomedSpecimenScreen(specimenId: p(s, 'sid'), detectionId: p(s, 'did')), fade: true),
       full('/capture/:sid', (s) => CaptureReviewScreen(specimenId: p(s, 'sid'))),

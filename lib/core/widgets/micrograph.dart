@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -124,11 +125,33 @@ class Micrograph extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    Widget img = CustomPaint(
+    final fallback = CustomPaint(
       painter: MicrographPainter(specimen, emphasis: adjustments.emphasis, drift: drift),
       isComplex: true,
       willChange: drift != Offset.zero,
     );
+    Widget img;
+    final local = specimen.localPath;
+    final remote = specimen.imageUrl;
+    if (local != null && local.isNotEmpty && File(local).existsSync()) {
+      img = Image.file(
+        File(local),
+        fit: fit,
+        width: 640,
+        height: 640,
+        errorBuilder: (_, _, _) => fallback,
+      );
+    } else if (remote != null && remote.isNotEmpty) {
+      img = Image.network(
+        remote,
+        fit: fit,
+        width: 640,
+        height: 640,
+        errorBuilder: (_, _, _) => fallback,
+      );
+    } else {
+      img = fallback;
+    }
     if (!adjustments.isNone) {
       img = ColorFiltered(colorFilter: ColorFilter.matrix(adjustments.colorMatrix), child: img);
     }

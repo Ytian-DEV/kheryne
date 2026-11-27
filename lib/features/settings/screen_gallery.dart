@@ -124,6 +124,7 @@ final galleryEntries = <GalleryEntry>[
   const GalleryEntry('onboarding-1', 'Onboarding · What it does', 'Android'),
   const GalleryEntry('onboarding-2', 'Onboarding · Clip to eyepiece', 'Android'),
   const GalleryEntry('onboarding-3', 'Onboarding · Offline models', 'Android'),
+  const GalleryEntry('auth', 'Sign in & cloud sync', 'Both', location: Routes.auth, platform: GalleryPlatform.both),
   const GalleryEntry('home', 'Home', 'Android', location: Routes.home, states: _all),
   const GalleryEntry('live-scan', 'Live Scan', 'Android'),
   const GalleryEntry('live-blurry', 'Live Scan · Blurry', 'Android'),

@@ -39,7 +39,12 @@ class _RegionHeaderState extends State<RegionHeader> {
               return Stack(
                 children: [
                   Positioned.fill(
-                    child: SpecimenPortrait(genus: widget.report.genus, seed: widget.report.specimen.seed),
+                    child: SpecimenPortrait(
+                      genus: widget.report.genus,
+                      seed: widget.report.specimen.seed,
+                      localPath: widget.report.specimen.localPath,
+                      imageUrl: widget.report.specimen.imageUrl,
+                    ),
                   ),
                   for (final r in SpecimenRegion.values)
                     if (_on.contains(r) && widget.report.regions[r] != null)

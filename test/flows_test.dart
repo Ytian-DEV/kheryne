@@ -133,9 +133,23 @@ void main() {
   });
 
   testWidgets('text scaling to 130% does not overflow key screens', (tester) async {
-    for (final route in ['/home', '/report/r-107', '/history', '/settings', '/tools/key']) {
+    for (final route in ['/home', '/report/r-107', '/history', '/settings', '/tools/key', '/auth']) {
       await pumpApp(tester, route, textScale: 1.3);
       expect(tester.takeException(), isNull, reason: route);
     }
+  });
+
+  testWidgets('auth screen switches between sign in and create account and supports offline mode', (tester) async {
+    await pumpApp(tester, '/auth');
+    expect(find.text('Sync across phone and lab computer'), findsOneWidget);
+    expect(find.text('Continue with Google'), findsOneWidget);
+
+    await tester.tap(find.text('Create account').first);
+    await settle(tester);
+    expect(find.text('Full name (shown on reports)'), findsOneWidget);
+
+    await tester.tap(find.text('Use offline'));
+    await settle(tester);
+    expect(find.text('Start live scan'), findsWidgets);
   });
 }

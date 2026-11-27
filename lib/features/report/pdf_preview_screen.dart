@@ -133,7 +133,19 @@ class A4Page extends StatelessWidget {
                   const SizedBox(height: 6),
                   Divider(height: 1, color: k.separator),
                   const SizedBox(height: 12),
-                  SizedBox(height: 120, width: double.infinity, child: ClipRRect(borderRadius: BorderRadius.circular(4), child: SpecimenPortrait(genus: report.genus, seed: report.specimen.seed))),
+                  SizedBox(
+                    height: 120,
+                    width: double.infinity,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: SpecimenPortrait(
+                        genus: report.genus,
+                        seed: report.specimen.seed,
+                        localPath: report.specimen.localPath,
+                        imageUrl: report.specimen.imageUrl,
+                      ),
+                    ),
+                  ),
                   const SizedBox(height: 12),
                   Text.rich(TextSpan(style: s(t.title2), children: [
                     TextSpan(text: c.isUncertain ? 'Possibly ' : 'Likely '),

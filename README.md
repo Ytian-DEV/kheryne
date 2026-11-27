@@ -2,9 +2,9 @@
 
 *Kheryne: An AI-Assisted Mobile and Desktop Application for Identifying Plant-Parasitic Nematodes from Order to Genus Through Morphological Analysis of Microscope Images* (Visayas State University, BS Computer Science).
 
-This is the **UI layer**: every screen, state and flow for Android and Windows, wired to mock data. There is no real camera ML or backend yet. iOS and macOS folders are generated so those platforms can be built later from the same code.
+Cross-platform **Flutter** client (Android & Windows, with iOS/macOS scaffolded) connected to **Supabase** (PostgreSQL + Row-Level Security, Auth, and Storage), an **offline-first local cache & sync queue**, and a pluggable **Python FastAPI + OpenCV/ONNX ML server** (`server/`).
 
-Design system and screen list: [`docs/DESIGN.md`](docs/DESIGN.md). Screenshots: [`docs/screenshots/`](docs/screenshots/).
+Design system and screen list: [`docs/DESIGN.md`](docs/DESIGN.md). Screenshots: [`docs/screenshots/`](docs/screenshots/). Python ML Server: [`server/README.md`](server/README.md).
 
 ## Run
 
@@ -83,18 +83,14 @@ test/                        flows, screenshot generator, harness
 docs/                        DESIGN.md, screenshots/
 ```
 
-## What is mocked, and where the real parts plug in
+## Backend & Hybrid AI Architecture
 
-| Area | Now | Replace with |
+| Area | Implementation | Notes |
 |---|---|---|
-| Detection, box check, classification | `MockIdentificationRepository` (`lib/mock/mock_repository.dart`) returns deterministic results with simulated latency. | An implementation of `IdentificationRepository` (`lib/core/data/repositories.dart`) that runs the on-device detector and classifier (e.g. TFLite / ONNX). Swap it in `identificationRepositoryProvider` (`lib/core/providers.dart`). The UI depends only on the interface. |
-| Storage (history, notes, calibrations) | In memory | SQLite (e.g. `drift`), behind the same repository and `SettingsController`. |
-| Micrograph images | Painted in code (`Micrograph`, `SpecimenPortrait`). | **Replace with real dataset images.** `Specimen` gets an image path; `Micrograph` renders it. Boxes already use normalised coordinates. |
-| Image filters | Colour-matrix approximations; CLAHE, sharpen and edge are simulated. | OpenCV / image processing. The filter list is config-driven (`features/scan/filters.dart`). |
-| Camera | `camera` package preview on Android when Settings → "Demo feed" is off; falls back to the mock feed when no camera is available. | Frame stream into the detector. |
-| Pairing | State machine with a mock QR pattern. | Local-network service (mDNS + WebSocket/WebRTC) and a real QR encoder. |
-| File import / drag-and-drop / export | Pickers pick mock specimens; exports show a confirmation. | `file_selector`, `desktop_drop`, and `pdf` / CSV / Excel writers. |
-| NeMys link | Opens `nemys.ugent.be` search with `url_launcher`. | — |
+| Cloud database & Auth | **Supabase** (`supabase_flutter`, project `wxdacmoxlvblmakrwkog`, `ap-southeast-1`) | PostgreSQL with RLS on every table (`profiles`, `calibration_profiles`, `taxonomy_*`, `genera`, `specimens`, `detections`, `reports`, `ml_model_releases`), Email/Password + Google Sign-In, and Storage buckets (`specimens`, `reference-gallery`, `ml-models`). SQL migrations live in `supabase/migrations/`. |
+| Offline-first persistence & sync | `LocalCacheStore` + `HybridIdentificationRepository` (`lib/core/data/`) | Imported micrographs, detections, reports, notes, and calibrations are saved locally first under `ApplicationSupportDirectory` and queued in `sync_queue.json` when lab Wi-Fi is down, syncing automatically once online and signed in. |
+| Hybrid AI server | `server/` (Python **FastAPI + OpenCV + ONNX Runtime**) | Ready to run locally (`uvicorn app.main:app --port 7860`) or free on **Hugging Face Spaces (Docker, 16 GB RAM)**. Drop trained `detector.onnx` and `classifier.onnx` into `server/models/` to switch from the OpenCV baseline to neural network weights. |
+| File import & CSV export | `file_selector` (`photo_picker_sheet.dart`, `import_screen.dart`, `batch_screen.dart`) | Real single-file, multi-file, and folder micrograph imports (JPEG, PNG, WebP, TIFF) plus CSV batch export. |
 
 ## Notes and deviations from the brief
 

@@ -46,3 +46,13 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Python ML Server & Environment Secrets
+.env
+server/.env
+server/.venv/
+server/__pycache__/
+server/**/__pycache__/
+server/models/*.onnx
+server/models/*.pt
+server/models/*.tflite
