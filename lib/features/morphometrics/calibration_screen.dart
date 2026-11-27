@@ -1,7 +1,13 @@
+import 'dart:io';
+import 'dart:math' as math;
+import 'dart:ui' as ui;
+
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/config/app_config.dart';
 import '../../core/layout/form_factor.dart';
 import '../../core/models/models.dart';
 import '../../core/providers.dart';
@@ -9,8 +15,14 @@ import '../../core/theme/theme.dart';
 import '../../core/utils/format.dart';
 import '../../core/widgets/widgets.dart';
 
-/// Photograph a stage micrometer, drag two handles across a known
-/// distance, enter it in µm, and save it for the objective.
+const _micrometerGroup = XTypeGroup(
+  label: 'Micrometer images',
+  extensions: ['jpg', 'jpeg', 'png', 'webp', 'tif', 'tiff'],
+);
+
+/// Photograph or import a real stage micrometer slide, drag two handles across
+/// a known graduation distance in µm, and save the exact µm/px scale for that
+/// microscope objective to Supabase.
 class CalibrationScreen extends ConsumerStatefulWidget {
   const CalibrationScreen({super.key});
 
@@ -24,8 +36,10 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
   double _b = 0.78;
   final _known = TextEditingController(text: '100');
 
-  /// Width of the mock micrometer photo in pixels.
-  static const _photoPx = 1600.0;
+  Uint8List? _imageBytes;
+  String? _imageName;
+  double? _realWidthPx;
+  double? _realHeightPx;
 
   @override
   void dispose() {
@@ -33,9 +47,34 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
     super.dispose();
   }
 
-  double get _px => ((_b - _a).abs() * _photoPx);
+  Future<void> _pickMicrometerPhoto() async {
+    try {
+      final xFile = await openFile(acceptedTypeGroups: const [_micrometerGroup]);
+      if (xFile == null) return;
+      final bytes = await xFile.readAsBytes();
+      final codec = await ui.instantiateImageCodec(bytes);
+      final frame = await codec.getNextFrame();
+      final w = frame.image.width.toDouble();
+      final h = frame.image.height.toDouble();
+      frame.image.dispose();
+      if (!mounted) return;
+      setState(() {
+        _imageBytes = bytes;
+        _imageName = xFile.name;
+        _realWidthPx = w;
+        _realHeightPx = h;
+      });
+    } catch (_) {
+      if (mounted) showToast(context, 'Could not decode that micrometer image.');
+    }
+  }
+
+  bool get _hasPhoto => _imageBytes != null && _realWidthPx != null;
+  double get _effectiveWidthPx => _realWidthPx ?? 1600.0;
+  double get _px => (_b - _a).abs() * _effectiveWidthPx;
   double? get _um => double.tryParse(_known.text.replaceAll(',', '.'));
   double? get _umPerPx => _um == null || _px < 1 ? null : _um! / _px;
+  bool get _canSave => _umPerPx != null && (_hasPhoto || !AppConfig.supabaseReady);
 
   @override
   Widget build(BuildContext context) {
@@ -45,6 +84,9 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
     final existing = settings.calibrationFor(_objective);
     final now = ref.watch(clockProvider)();
     final desktop = FormFactor.of(context).isDesktop;
+    final aspect = (_realWidthPx != null && _realHeightPx != null && _realHeightPx! > 0)
+        ? (_realWidthPx! / _realHeightPx!).clamp(0.8, 2.2)
+        : 1.5;
 
     final content = <Widget>[
       KSegmentedControl<int>(
@@ -52,11 +94,31 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
         value: _objective,
         onChanged: (v) => setState(() => _objective = v),
       ),
-      const SizedBox(height: KSpace.s16),
+      const SizedBox(height: KSpace.s12),
+      Row(
+        children: [
+          Expanded(
+            child: Text(
+              _hasPhoto
+                  ? '$_imageName · ${_realWidthPx!.round()}×${_realHeightPx!.round()} px'
+                  : 'Import a photo of your stage micrometer at $_objective× to measure exact pixels.',
+              style: t.caption,
+            ),
+          ),
+          const SizedBox(width: KSpace.s8),
+          KButton.secondary(
+            label: _hasPhoto ? 'Change photo' : 'Import micrometer photo',
+            icon: KIcons.upload,
+            size: KButtonSize.compact,
+            onPressed: _pickMicrometerPhoto,
+          ),
+        ],
+      ),
+      const SizedBox(height: KSpace.s12),
       ClipRRect(
         borderRadius: KRadius.sheetAll,
         child: AspectRatio(
-          aspectRatio: 1.5,
+          aspectRatio: aspect,
           child: LayoutBuilder(builder: (context, c) {
             final w = c.maxWidth;
             final y = c.maxHeight * 0.5;
@@ -94,10 +156,14 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
                   ),
                 );
             return Stack(children: [
-              Positioned.fill(child: CustomPaint(painter: _MicrometerPainter(objective: _objective, lineColor: k.canvas))),
+              Positioned.fill(
+                child: _hasPhoto
+                    ? Image.memory(_imageBytes!, fit: BoxFit.fill)
+                    : CustomPaint(painter: _MicrometerPainter(objective: _objective, lineColor: k.canvas)),
+              ),
               Positioned(
-                left: _a * w,
-                width: (_b - _a) * w,
+                left: math.min(_a, _b) * w,
+                width: (_b - _a).abs() * w,
                 top: y - 1,
                 child: Container(height: 2, color: k.userBox),
               ),
@@ -109,8 +175,10 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: KSpace.s8, vertical: 3),
                     decoration: BoxDecoration(color: k.userBox, borderRadius: BorderRadius.circular(KRadius.box)),
-                    child: Text('${_px.round()} px',
-                        style: t.micro.copyWith(color: onFill(k.userBox), fontWeight: FontWeight.w600, fontFeatures: KType.tabular)),
+                    child: Text(
+                      '${_px.round()} px',
+                      style: t.micro.copyWith(color: onFill(k.userBox), fontWeight: FontWeight.w600, fontFeatures: KType.tabular),
+                    ),
                   ),
                 ),
               ),
@@ -121,7 +189,7 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
         ),
       ),
       const SizedBox(height: KSpace.s8),
-      Text('Drag the purple handles to two graduations on the stage micrometer.', style: t.caption),
+      Text('Drag the purple handles to two graduations on your stage micrometer.', style: t.caption),
       const SizedBox(height: KSpace.s20),
       TextField(
         controller: _known,
@@ -132,10 +200,17 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
       ),
       const SizedBox(height: KSpace.s16),
       KListSection(children: [
-        KListRow(title: 'Scale', value: _umPerPx == null ? '—' : '${_umPerPx!.toStringAsFixed(3)} µm/px'),
+        KListRow(
+          title: 'Computed scale',
+          value: !_hasPhoto && AppConfig.supabaseReady
+              ? 'Import micrometer photo first'
+              : (_umPerPx == null ? '—' : '${_umPerPx!.toStringAsFixed(4)} µm/px'),
+        ),
         KListRow(
           title: 'Saved for $_objective×',
-          value: existing == null ? 'None yet' : '${existing.micrometresPerPixel.toStringAsFixed(3)} µm/px · ${relative(existing.savedAt, now)}',
+          value: existing == null
+              ? 'None yet'
+              : '${existing.micrometresPerPixel.toStringAsFixed(4)} µm/px · ${relative(existing.savedAt, now)}',
         ),
       ]),
       if (_umPerPx == null) ...[
@@ -149,7 +224,12 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
       body: ListView(
         padding: EdgeInsets.fromLTRB(desktop ? KSpace.s32 : KSpace.s16, KSpace.s8, desktop ? KSpace.s32 : KSpace.s16, KSpace.s24),
         children: [
-          Center(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 720), child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: content))),
+          Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 720),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: content),
+            ),
+          ),
         ],
       ),
       bottomNavigationBar: SafeArea(
@@ -160,10 +240,12 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 720),
               child: KButton(
-                label: existing == null ? 'Save for $_objective×' : 'Replace $_objective× profile',
+                label: !_hasPhoto && AppConfig.supabaseReady
+                    ? 'Import micrometer photo to save'
+                    : (existing == null ? 'Save for $_objective×' : 'Replace $_objective× profile'),
                 expand: true,
-                onPressed: _umPerPx == null
-                    ? null
+                onPressed: !_canSave
+                    ? (AppConfig.supabaseReady && !_hasPhoto ? _pickMicrometerPhoto : null)
                     : () {
                         ref.read(settingsProvider.notifier).saveCalibration(CalibrationProfile(
                               objective: _objective,
@@ -172,6 +254,9 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
                               referenceMicrometres: _um!,
                             ));
                         showToast(context, 'Saved calibration for $_objective×.');
+                        if (Platform.isWindows || Platform.isAndroid) {
+                          Navigator.of(context).maybePop();
+                        }
                       },
               ),
             ),
@@ -182,7 +267,6 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
   }
 }
 
-/// Mock photo of a stage micrometer: bright field with a graduated scale.
 class _MicrometerPainter extends CustomPainter {
   _MicrometerPainter({required this.objective, required this.lineColor});
   final int objective;
@@ -193,8 +277,10 @@ class _MicrometerPainter extends CustomPainter {
     canvas.drawRect(
       Offset.zero & size,
       Paint()
-        ..shader = const RadialGradient(colors: [MicrographPalette.field, MicrographPalette.fieldMid, MicrographPalette.fieldEdge], stops: [0, 0.7, 1])
-            .createShader(Offset.zero & size),
+        ..shader = const RadialGradient(
+          colors: [MicrographPalette.field, MicrographPalette.fieldMid, MicrographPalette.fieldEdge],
+          stops: [0, 0.7, 1],
+        ).createShader(Offset.zero & size),
     );
     final y = size.height * 0.5;
     final spacing = size.width / (objective == 10 ? 50 : (objective == 40 ? 20 : 8));

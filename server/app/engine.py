@@ -1,4 +1,3 @@
-import hashlib
 import os
 from typing import List, Optional
 import cv2
@@ -42,7 +41,7 @@ class KheryneMLEngine:
 
     @property
     def classifier_mode(self) -> str:
-        return "onnx" if self.classifier_session is not None else "opencv-feature-baseline"
+        return "onnx" if self.classifier_session is not None else "untrained"
 
     @staticmethod
     def decode_image(raw_bytes: bytes) -> np.ndarray:
@@ -184,23 +183,21 @@ class KheryneMLEngine:
         )
 
     def analyze(self, bgr: np.ndarray, rect: Optional[NormRect] = None) -> AnalyzeResponse:
+        if self.classifier_session is None:
+            raise RuntimeError(
+                "Genus classifier weights (models/classifier.onnx) are not loaded on the server yet. "
+                "Collect verified samples in Lab Dataset & Review Queue, train the model, and place classifier.onnx in server/models/."
+            )
+
         crop = self._crop(bgr, rect)
-        if self.classifier_session is not None:
-            inp_meta = self.classifier_session.get_inputs()[0]
-            resized = cv2.resize(crop, (224, 224))
-            blob = resized[:, :, ::-1].transpose(2, 0, 1).astype(np.float32) / 255.0
-            logits = np.squeeze(self.classifier_session.run(None, {inp_meta.name: blob[None, ...]})[0])
-            exp = np.exp(logits - np.max(logits))
-            probs = exp / np.sum(exp)
-            top_idx = int(np.argmax(probs)) % len(PHILIPPINE_GENERA)
-            genus_conf = min(0.99, float(probs[top_idx]))
-        else:
-            # Deterministic morphological feature hash on real pixel crop until classifier.onnx is added
-            resized = cv2.resize(crop, (128, 128))
-            digest = hashlib.sha256(resized.tobytes()).digest()
-            top_idx = digest[0] % len(PHILIPPINE_GENERA)
-            contrast = float(np.std(cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)))
-            genus_conf = round(min(0.94, max(0.56, 0.64 + (contrast % 28) / 100.0)), 2)
+        inp_meta = self.classifier_session.get_inputs()[0]
+        resized = cv2.resize(crop, (224, 224))
+        blob = resized[:, :, ::-1].transpose(2, 0, 1).astype(np.float32) / 255.0
+        logits = np.squeeze(self.classifier_session.run(None, {inp_meta.name: blob[None, ...]})[0])
+        exp = np.exp(logits - np.max(logits))
+        probs = exp / np.sum(exp)
+        top_idx = int(np.argmax(probs)) % len(PHILIPPINE_GENERA)
+        genus_conf = round(min(0.99, float(probs[top_idx])), 3)
 
         info = PHILIPPINE_GENERA[top_idx]
         family_conf = round(min(0.97, max(genus_conf + 0.11, 0.74)), 2)

@@ -25,6 +25,7 @@ import '../../features/scan/zoomed_specimen_screen.dart';
 import '../../features/settings/component_sheet.dart';
 import '../../features/settings/screen_gallery.dart';
 import '../../features/settings/settings_screen.dart';
+import '../../features/training/training_screen.dart';
 import '../../features/workspace/compare_screen.dart';
 import '../../features/workspace/import_screen.dart';
 import '../../features/workspace/workspace_screen.dart';
@@ -84,6 +85,7 @@ GoRouter buildRouter({required FormFactor formFactor, String? initialLocation, r
           StatefulShellBranch(routes: [GoRoute(path: Routes.live, builder: (_, _) => const DesktopLiveScreen())]),
           StatefulShellBranch(routes: [GoRoute(path: Routes.batchDesktop, builder: (_, _) => const BatchScreen(embedded: true))]),
           StatefulShellBranch(routes: [GoRoute(path: Routes.keyDesktop, builder: (_, _) => const KeyScreen(embedded: true))]),
+          StatefulShellBranch(routes: [GoRoute(path: Routes.trainingDesktop, builder: (_, _) => const TrainingScreen(embedded: true))]),
         ],
       ),
       full(Routes.onboarding, (_) => const OnboardingScreen()),
@@ -101,6 +103,7 @@ GoRouter buildRouter({required FormFactor formFactor, String? initialLocation, r
       full(Routes.calibrate, (_) => const CalibrationScreen()),
       full('/tools/key', (s) => KeyScreen(fromReport: s.uri.queryParameters['from'])),
       full(Routes.batch, (_) => const BatchScreen()),
+      full(Routes.training, (_) => const TrainingScreen()),
       full(Routes.pairPhone, (_) => const PhonePairScreen()),
       full('/compare/:sid/:genus', (s) => CompareScreen(specimenId: p(s, 'sid'), genus: p(s, 'genus'))),
       full(Routes.import, (_) => const ImportScreen()),

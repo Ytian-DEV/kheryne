@@ -11,6 +11,7 @@ import 'data/cloud_repositories.dart';
 import 'data/local_cache_store.dart';
 import 'data/ml_server_client.dart';
 import 'data/repositories.dart';
+import 'data/training_repository.dart';
 import 'layout/form_factor.dart';
 import 'models/models.dart';
 import 'models/serialization.dart';
@@ -19,7 +20,7 @@ import 'widgets/async_view.dart' show ViewState;
 /// Current time. Overridden with a fixed date in tests and screenshots.
 final clockProvider = Provider<DateTime Function()>((ref) => DateTime.now);
 
-/// Simulated repository latency. Zero in tests.
+/// Simulated repository latency (used only by MockIdentificationRepository in widget tests).
 final latencyProvider = Provider<Duration>((ref) => const Duration(milliseconds: 450));
 
 /// Persistent offline-first store for specimens, detections, reports, and sync queue.
@@ -32,7 +33,6 @@ class FormFactorController extends Notifier<FormFactor> {
   @override
   FormFactor build() => _initial ?? FormFactor.fromPlatform();
 
-  /// Screen gallery: preview the other layout.
   void set(FormFactor f) => state = f;
 }
 
@@ -73,6 +73,10 @@ final referenceRepositoryProvider = Provider<ReferenceRepository>((ref) {
   return cloud ?? const MockReferenceRepository();
 });
 
+final trainingRepositoryProvider = Provider<TrainingDatasetRepository>((ref) {
+  return TrainingDatasetRepository(reference: ref.watch(referenceRepositoryProvider));
+});
+
 final mlServerClientProvider = Provider<MlServerClient>((ref) {
   return MlServerClient(
     baseUrlProvider: () => ref.read(settingsProvider).mlServerUrl,
@@ -87,9 +91,10 @@ final hybridRepositoryProvider = Provider<HybridIdentificationRepository?>((ref)
     cache: ref.watch(localCacheProvider),
     mlClient: ref.watch(mlServerClientProvider),
     reference: ref.watch(referenceRepositoryProvider),
+    training: ref.watch(trainingRepositoryProvider),
     now: ref.watch(clockProvider),
     isOnline: () => ref.read(onlineProvider),
-    latency: ref.watch(latencyProvider),
+    trainingOptIn: () => ref.read(settingsProvider).trainingOptIn,
   );
 });
 
@@ -106,7 +111,7 @@ final specimensProvider = FutureProvider<List<Specimen>>((ref) => ref.watch(iden
 final specimenProvider = FutureProvider.family<Specimen?, String>(
     (ref, id) => ref.watch(identificationRepositoryProvider).specimen(id));
 
-/// Reports produced in this session but not saved yet.
+/// Reports produced in this session before or during save.
 class PendingReports extends Notifier<Map<String, Report>> {
   @override
   Map<String, Report> build() => const {};
@@ -153,32 +158,40 @@ class AppSettings {
     this.scanAlwaysDark = true,
     this.system = ClassificationSystem.nemys2026,
     this.language = 'English',
-    this.demoFeed = true,
+    this.demoFeed = false,
     this.onboarded = false,
-    this.userName = 'Ana Dela Cruz',
+    this.userName = '',
     this.calibrations = const [],
-    this.modelVersion = '2.3.0',
-    this.modelSizeMb = 48.6,
+    this.modelVersion = 'None',
+    this.modelSizeMb = 0,
+    this.lastModelCheckAt,
     this.mlServerUrl = AppConfig.defaultMlServerUrl,
+    this.trainingOptIn = true,
   });
 
   final ThemeMode themeMode;
-
-  /// Live Scan and Workspace stay dark for dim labs regardless of theme.
   final bool scanAlwaysDark;
   final ClassificationSystem system;
   final String language;
 
-  /// Show the looping mock micrograph instead of the real camera.
+  /// Developer-only demo feed toggle (OFF by default in production).
   final bool demoFeed;
   final bool onboarded;
   final String userName;
   final List<CalibrationProfile> calibrations;
   final String modelVersion;
   final double modelSizeMb;
+  final DateTime? lastModelCheckAt;
   final String mlServerUrl;
+  final bool trainingOptIn;
 
-  String get firstName => userName.split(' ').first;
+  String? get firstNameOrNull {
+    final trimmed = userName.trim();
+    if (trimmed.isEmpty) return null;
+    return trimmed.split(RegExp(r'\s+')).first;
+  }
+
+  String get firstName => firstNameOrNull ?? 'Researcher';
 
   CalibrationProfile? calibrationFor(int objective) {
     for (final c in calibrations) {
@@ -198,7 +211,9 @@ class AppSettings {
     List<CalibrationProfile>? calibrations,
     String? modelVersion,
     double? modelSizeMb,
+    DateTime? lastModelCheckAt,
     String? mlServerUrl,
+    bool? trainingOptIn,
   }) =>
       AppSettings(
         themeMode: themeMode ?? this.themeMode,
@@ -211,7 +226,9 @@ class AppSettings {
         calibrations: calibrations ?? this.calibrations,
         modelVersion: modelVersion ?? this.modelVersion,
         modelSizeMb: modelSizeMb ?? this.modelSizeMb,
+        lastModelCheckAt: lastModelCheckAt ?? this.lastModelCheckAt,
         mlServerUrl: mlServerUrl ?? this.mlServerUrl,
+        trainingOptIn: trainingOptIn ?? this.trainingOptIn,
       );
 
   Map<String, dynamic> toJson() => {
@@ -224,7 +241,9 @@ class AppSettings {
         'user_name': userName,
         'model_version': modelVersion,
         'model_size_mb': modelSizeMb,
+        'last_model_check_at': lastModelCheckAt?.toUtc().toIso8601String(),
         'ml_server_url': mlServerUrl,
+        'training_opt_in': trainingOptIn,
       };
 }
 
@@ -236,23 +255,32 @@ class SettingsController extends Notifier<AppSettings> {
     final saved = cache.settingsJson;
     final savedCals = cache.calibrations;
 
-    final defaultCals = [
-      CalibrationProfile(
-        objective: 10,
-        micrometresPerPixel: 1.62,
-        savedAt: now.subtract(const Duration(days: 12)),
-        referenceMicrometres: 1000,
-      ),
-      CalibrationProfile(
-        objective: 40,
-        micrometresPerPixel: 0.405,
-        savedAt: now.subtract(const Duration(days: 12)),
-        referenceMicrometres: 200,
-      ),
-    ];
+    // In headless widget tests (!AppConfig.supabaseReady), keep test fixtures deterministic.
+    if (!AppConfig.supabaseReady && saved == null) {
+      return AppSettings(
+        demoFeed: true,
+        userName: 'Ana Dela Cruz',
+        modelVersion: '2.3.0',
+        modelSizeMb: 48.6,
+        calibrations: [
+          CalibrationProfile(
+            objective: 10,
+            micrometresPerPixel: 1.62,
+            savedAt: now.subtract(const Duration(days: 12)),
+            referenceMicrometres: 1000,
+          ),
+          CalibrationProfile(
+            objective: 40,
+            micrometresPerPixel: 0.405,
+            savedAt: now.subtract(const Duration(days: 12)),
+            referenceMicrometres: 200,
+          ),
+        ],
+      );
+    }
 
     if (saved == null) {
-      return AppSettings(calibrations: savedCals.isNotEmpty ? savedCals : defaultCals);
+      return AppSettings(calibrations: savedCals);
     }
 
     final modeName = saved['theme_mode'] as String? ?? 'system';
@@ -262,19 +290,22 @@ class SettingsController extends Notifier<AppSettings> {
     );
     final sysName = saved['system'] as String? ?? 'nemys2026';
     final system = sysName == 'classic' ? ClassificationSystem.classic : ClassificationSystem.nemys2026;
+    final rawCheck = saved['last_model_check_at'] as String?;
 
     return AppSettings(
       themeMode: themeMode,
       scanAlwaysDark: saved['scan_always_dark'] as bool? ?? true,
       system: system,
       language: saved['language'] as String? ?? 'English',
-      demoFeed: saved['demo_feed'] as bool? ?? true,
+      demoFeed: saved['demo_feed'] as bool? ?? false,
       onboarded: saved['onboarded'] as bool? ?? false,
-      userName: saved['user_name'] as String? ?? 'Ana Dela Cruz',
-      calibrations: savedCals.isNotEmpty ? savedCals : defaultCals,
-      modelVersion: saved['model_version'] as String? ?? '2.3.0',
-      modelSizeMb: (saved['model_size_mb'] as num? ?? 48.6).toDouble(),
+      userName: saved['user_name'] as String? ?? '',
+      calibrations: savedCals,
+      modelVersion: saved['model_version'] as String? ?? 'None',
+      modelSizeMb: (saved['model_size_mb'] as num? ?? 0).toDouble(),
+      lastModelCheckAt: rawCheck == null ? null : DateTime.tryParse(rawCheck)?.toLocal(),
       mlServerUrl: saved['ml_server_url'] as String? ?? AppConfig.defaultMlServerUrl,
+      trainingOptIn: saved['training_opt_in'] as bool? ?? true,
     );
   }
 

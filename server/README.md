@@ -24,13 +24,25 @@ Designed to run locally during development or for **$0/month** on **Hugging Face
 | `POST` | `/v1/check-box` | Verifies whether a cropped user/candidate box contains a plant-parasitic nematode |
 | `POST` | `/v1/analyze` | Hierarchical `Order -> Family -> Genus` classification, diagnostic traits, and region localization |
 
-## Plugging in Your Trained Models
+## Exporting Verified Training Data & Plugging in Trained Models
 
-Drop exported ONNX weights into `server/models/`:
+1. Export Scientist **Gold** (`verified_gold`) and Scientist-verified user **Silver** (`verified_silver`) samples from Supabase into Ultralytics YOLO detection + 19-genus classification folders:
+
+```bash
+SUPABASE_URL=https://wxdacmoxlvblmakrwkog.supabase.co \
+SUPABASE_SERVICE_KEY=<service-or-scientist-jwt> \
+python export_dataset.py --out dataset_out
+```
+
+This creates:
+- `dataset_out/yolo_detector/dataset.yaml` (`train/` + `val/` images & normalized YOLO labels)
+- `dataset_out/genus_classifier/{train,val}/<Genus>/` (cropped nematode specimens across the 19 target genera)
+
+2. After training YOLO + your genus classifier and exporting ONNX weights, drop them into `server/models/`:
 - `server/models/detector.onnx` — candidate nematode detector
 - `server/models/classifier.onnx` — 19-genus morphological classifier
 
-When those files exist, `app/engine.py` automatically switches from the OpenCV contour/morphological baseline engine to `onnxruntime.InferenceSession` without changing any API contracts.
+When those files exist, `app/engine.py` automatically runs `onnxruntime.InferenceSession`. Until `classifier.onnx` is present, `/v1/analyze` returns HTTP `503` instead of fabricating placeholder genus predictions.
 
 ## Run Locally
 

@@ -23,6 +23,7 @@ abstract final class Branch {
   static const live = 5;
   static const batch = 6;
   static const key = 7;
+  static const training = 8;
 }
 
 // Desktop keyboard intents, handled by the screen that owns them.
@@ -148,6 +149,7 @@ class _DesktopShell extends ConsumerWidget {
     (Branch.history, KIcons.history, 'History'),
     (Branch.gallery, KIcons.gallery, 'Reference gallery'),
     (Branch.key, KIcons.key, 'Dichotomous key'),
+    (Branch.training, KIcons.flask, 'Lab dataset'),
   ];
 
   @override
@@ -218,7 +220,10 @@ class _DesktopShell extends ConsumerWidget {
                             item(Branch.settings, KIcons.settings, 'Settings'),
                             const SizedBox(height: KSpace.s8),
                             _ModelStatus(
-                                collapsed: collapsed, version: settings.modelVersion, online: online),
+                              collapsed: collapsed,
+                              version: settings.modelVersion,
+                              online: online,
+                            ),
                           ],
                         ),
                       ),
@@ -324,8 +329,15 @@ class _ModelStatus extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final k = context.k;
-    final label = 'Models v$version · ${online ? 'up to date' : 'offline'}';
-    final dot = Container(width: 8, height: 8, decoration: BoxDecoration(color: k.success, shape: BoxShape.circle));
+    final ready = version != 'None' && version.isNotEmpty;
+    final label = ready
+        ? 'Models v$version · ${online ? 'ready' : 'offline'}'
+        : 'Models · ${online ? 'OpenCV detector' : 'offline'}';
+    final dot = Container(
+      width: 8,
+      height: 8,
+      decoration: BoxDecoration(color: ready ? k.success : k.warning, shape: BoxShape.circle),
+    );
     return Semantics(
       label: label,
       excludeSemantics: true,

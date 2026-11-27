@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/config/app_config.dart';
 import '../../core/layout/app_shell.dart';
 import '../../core/layout/form_factor.dart';
+import '../../core/models/serialization.dart';
 import '../../core/providers.dart';
 import '../../core/router/routes.dart';
 import '../../core/theme/theme.dart';
@@ -13,8 +14,8 @@ import '../../core/widgets/widgets.dart';
 import '../../mock/taxonomy.dart';
 import '../auth/auth_controller.dart';
 
-/// Developer tools (screen gallery, simulate offline) unlock after tapping
-/// the version five times in About.
+/// Developer tools (screen gallery, demo feed, simulate offline) unlock after
+/// tapping the version five times in About.
 class DevUnlocked extends Notifier<bool> {
   @override
   bool build() => false;
@@ -23,7 +24,7 @@ class DevUnlocked extends Notifier<bool> {
 
 final devUnlockedProvider = NotifierProvider<DevUnlocked, bool>(DevUnlocked.new);
 
-const appVersion = '0.1.0 (1)';
+const appVersion = '0.2.0 (2)';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -38,6 +39,8 @@ class SettingsScreen extends ConsumerWidget {
     final online = ref.watch(onlineProvider);
     final desktop = FormFactor.of(context).isDesktop;
     final t = context.t;
+
+    final modelsValue = s.modelSizeMb > 0 ? '${s.modelSizeMb} MB' : 'OpenCV';
 
     return LargeTitleScaffold(
       title: 'Settings',
@@ -54,10 +57,10 @@ class SettingsScreen extends ConsumerWidget {
             children: [
               if (auth.isSignedIn) ...[
                 KListRow(
-                  title: auth.email ?? s.userName,
+                  title: auth.email ?? s.firstName,
                   subtitle: pendingCount > 0
-                      ? '${auth.institution} · $pendingCount item${pendingCount == 1 ? '' : 's'} queued offline'
-                      : '${auth.institution} · Synced',
+                      ? '${auth.roleLabel} · ${auth.institution} · $pendingCount queued offline'
+                      : '${auth.roleLabel} · ${auth.institution} · Synced',
                   leading: KIcons.user,
                   chevron: false,
                 ),
@@ -83,7 +86,7 @@ class SettingsScreen extends ConsumerWidget {
                   chevron: false,
                   onTap: () async {
                     await ref.read(authProvider.notifier).signOut();
-                    if (context.mounted) showToast(context, 'Signed out. Local offline scans remain on this device.');
+                    if (context.mounted) showToast(context, 'Signed out.');
                   },
                 ),
               ] else ...[
@@ -124,7 +127,7 @@ class SettingsScreen extends ConsumerWidget {
           ),
           const SizedBox(height: KSpace.s24),
           KListSection(
-            header: 'IDENTIFICATION',
+            header: 'IDENTIFICATION & DATASET',
             children: [
               KListRow(
                 title: 'Classification system',
@@ -132,20 +135,28 @@ class SettingsScreen extends ConsumerWidget {
                 value: s.system == ClassificationSystem.nemys2026 ? 'NeMys 2026' : 'Classic',
                 onTap: () => _pickSystem(context, ref),
               ),
-              KListRow(title: 'Offline models', leading: KIcons.cpu, value: '${s.modelSizeMb} MB', onTap: () => context.goTo(Routes.settingsModels)),
+              KListRow(
+                title: 'Models & ML server',
+                leading: KIcons.cpu,
+                value: modelsValue,
+                onTap: () => context.goTo(Routes.settingsModels),
+              ),
+              KListRow(
+                title: 'Lab dataset & review queue',
+                subtitle: auth.isScientistOrOwner
+                    ? 'Curate Gold lab samples and verify user submissions'
+                    : 'Submit slides for scientist verification',
+                leading: KIcons.flask,
+                onTap: () => desktop
+                    ? StatefulNavigationShell.maybeOf(context)?.goBranch(Branch.training)
+                    : context.pushTo(Routes.training),
+              ),
               KListRow(
                 title: 'Calibration profiles',
                 leading: KIcons.ruler,
                 value: '${s.calibrations.length}',
                 onTap: () => context.goTo(Routes.settingsCalibration),
               ),
-              if (!desktop)
-                KListRow(
-                  title: 'Demo feed in Live Scan',
-                  subtitle: 'Use sample micrographs instead of the camera',
-                  leading: KIcons.images,
-                  trailing: Switch(value: s.demoFeed, onChanged: (v) => c.update((x) => x.copyWith(demoFeed: v))),
-                ),
             ],
           ),
           const SizedBox(height: KSpace.s24),
@@ -163,8 +174,13 @@ class SettingsScreen extends ConsumerWidget {
             header: 'GENERAL',
             children: [
               KListRow(title: 'Language', leading: KIcons.language, value: s.language, onTap: () => _pickLanguage(context, ref)),
-              KListRow(title: 'Name on reports', leading: KIcons.user, value: s.userName, onTap: () => _editName(context, ref)),
-              KListRow(title: 'Privacy', leading: KIcons.shield, onTap: () => context.goTo(Routes.settingsPrivacy)),
+              KListRow(
+                title: 'Name on reports',
+                leading: KIcons.user,
+                value: s.userName.trim().isEmpty ? 'Not set' : s.userName,
+                onTap: () => _editName(context, ref),
+              ),
+              KListRow(title: 'Privacy & training consent', leading: KIcons.shield, onTap: () => context.goTo(Routes.settingsPrivacy)),
               KListRow(title: 'About Kheryne', leading: KIcons.info, value: appVersion, onTap: () => context.goTo(Routes.settingsAbout)),
             ],
           ),
@@ -175,6 +191,12 @@ class SettingsScreen extends ConsumerWidget {
               children: [
                 KListRow(title: 'Screen gallery', leading: KIcons.grid, onTap: () => context.pushTo(Routes.screenGallery)),
                 KListRow(title: 'Component sheet', leading: KIcons.layout, onTap: () => context.pushTo(Routes.components)),
+                KListRow(
+                  title: 'Demo feed in Live Scan',
+                  subtitle: 'Use painted sample slide instead of camera',
+                  leading: KIcons.images,
+                  trailing: Switch(value: s.demoFeed, onChanged: (v) => c.update((x) => x.copyWith(demoFeed: v))),
+                ),
                 KListRow(
                   title: 'Simulate offline',
                   leading: KIcons.wifiOff,
@@ -224,8 +246,11 @@ class SettingsScreen extends ConsumerWidget {
       ),
     );
     ctrl.dispose();
-    if (saved != null && saved.trim().isNotEmpty) {
-      await ref.read(authProvider.notifier).updateProfile(fullName: saved.trim());
+    if (saved != null) {
+      ref.read(settingsProvider.notifier).update((s) => s.copyWith(userName: saved.trim()));
+      if (saved.trim().isNotEmpty) {
+        await ref.read(authProvider.notifier).updateProfile(fullName: saved.trim());
+      }
     }
   }
 
@@ -293,35 +318,52 @@ class _ModelsScreenState extends ConsumerState<ModelsScreen> {
   bool _checkingUpdates = false;
   bool _checkingServer = false;
   String? _serverStatus;
+  List<MlModelRelease> _releases = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadReleases());
+  }
+
+  Future<void> _loadReleases() async {
+    final hybrid = ref.read(hybridRepositoryProvider);
+    if (hybrid == null) return;
+    final list = await hybrid.fetchActiveModelReleases();
+    if (mounted) setState(() => _releases = list);
+  }
 
   Future<void> _checkUpdates() async {
     final hybrid = ref.read(hybridRepositoryProvider);
+    final now = ref.read(clockProvider)();
     if (hybrid == null) {
-      showToast(context, 'You have the latest models.');
+      showToast(context, 'Checked model status.');
       return;
     }
     setState(() => _checkingUpdates = true);
     final releases = await hybrid.fetchActiveModelReleases();
     if (!mounted) return;
-    setState(() => _checkingUpdates = false);
+    setState(() {
+      _checkingUpdates = false;
+      _releases = releases;
+    });
     if (releases.isEmpty) {
-      showToast(context, 'You have the latest models.');
+      ref.read(settingsProvider.notifier).update(
+            (s) => s.copyWith(modelVersion: 'None', modelSizeMb: 0, lastModelCheckAt: now),
+          );
+      showToast(context, 'No trained ONNX releases published in Supabase yet.');
       return;
     }
     final latestVersion = releases.first.version;
     final totalSize = releases.fold<double>(0, (sum, r) => sum + r.sizeMb);
-    final current = ref.read(settingsProvider).modelVersion;
-    if (latestVersion != current) {
-      ref.read(settingsProvider.notifier).update(
-            (s) => s.copyWith(
-              modelVersion: latestVersion,
-              modelSizeMb: totalSize > 0 ? double.parse(totalSize.toStringAsFixed(1)) : s.modelSizeMb,
-            ),
-          );
-      showToast(context, 'Updated model metadata to v$latestVersion.');
-    } else {
-      showToast(context, 'Models v$current are up to date.');
-    }
+    ref.read(settingsProvider.notifier).update(
+          (s) => s.copyWith(
+            modelVersion: latestVersion,
+            modelSizeMb: double.parse(totalSize.toStringAsFixed(1)),
+            lastModelCheckAt: now,
+          ),
+        );
+    showToast(context, 'Synced active model release v$latestVersion.');
   }
 
   Future<void> _testServer() async {
@@ -331,8 +373,8 @@ class _ModelsScreenState extends ConsumerState<ModelsScreen> {
     setState(() {
       _checkingServer = false;
       _serverStatus = health.reachable
-          ? 'Connected · ${health.detectorEngine} / ${health.classifierEngine} (v${health.modelVersion})'
-          : 'Unreachable · using on-device engine';
+          ? 'Connected · Detector: ${health.detectorEngine} · Classifier: ${health.classifierEngine}'
+          : 'Unreachable · Start server/ or set Hugging Face Space URL';
     });
   }
 
@@ -379,25 +421,41 @@ class _ModelsScreenState extends ConsumerState<ModelsScreen> {
   Widget build(BuildContext context) {
     final s = ref.watch(settingsProvider);
     final online = ref.watch(onlineProvider) && ViewStateScope.of(context) != ViewState.offline;
-    final now = ref.watch(clockProvider)();
+    final detRel = _releases.where((r) => r.modelType == 'detector').firstOrNull;
+    final clsRel = _releases.where((r) => r.modelType == 'classifier').firstOrNull;
+
     return LargeTitleScaffold(
-      title: 'Offline models',
+      title: 'Models & ML server',
       maxContentWidth: 720,
       slivers: [
         SliverList.list(children: [
           KListSection(
-            header: 'ON THIS DEVICE',
-            footer: 'Live Scan and offline labs run on this device. When online, Kheryne can verify crops with your Python ML server.',
+            header: 'PUBLISHED MODEL WEIGHTS (SUPABASE)',
+            footer: 'Once you train detector.onnx and classifier.onnx from your curated dataset, publish them to ml_model_releases.',
             children: [
-              const KListRow(title: 'Nematode detector', subtitle: 'Finds candidates in the field of view', value: '21.4 MB'),
-              const KListRow(title: 'Genus classifier', subtitle: '19 genera recorded in the Philippines', value: '27.2 MB'),
-              KListRow(title: 'Version', value: s.modelVersion),
-              KListRow(title: 'Last checked', value: shortDate(now.subtract(const Duration(days: 3)))),
+              KListRow(
+                title: 'Nematode detector',
+                subtitle: detRel == null ? 'Using OpenCV morphological detector until trained' : 'Published v${detRel.version}',
+                value: detRel == null ? 'OpenCV' : '${detRel.sizeMb} MB',
+              ),
+              KListRow(
+                title: 'Genus classifier',
+                subtitle: clsRel == null ? 'Not trained yet · Collect samples in Lab dataset' : 'Published v${clsRel.version}',
+                value: clsRel == null ? 'Pending' : '${clsRel.sizeMb} MB',
+              ),
+              KListRow(
+                title: 'Active release',
+                value: s.modelVersion == 'None' ? 'None published' : s.modelVersion,
+              ),
+              KListRow(
+                title: 'Last checked',
+                value: s.lastModelCheckAt == null ? 'Never' : shortDate(s.lastModelCheckAt!),
+              ),
             ],
           ),
           const SizedBox(height: KSpace.s24),
           KButton.secondary(
-            label: online ? 'Check for updates' : 'Updates need a connection',
+            label: online ? 'Check Supabase for published models' : 'Updates need a connection',
             icon: KIcons.download,
             expand: true,
             loading: _checkingUpdates,
@@ -446,7 +504,7 @@ class CalibrationProfilesScreen extends ConsumerWidget {
               ? EmptyState(
                   art: LineArt.microscope,
                   message: 'No calibration profiles yet.',
-                  detail: 'Calibrate once per objective with a stage micrometer.',
+                  detail: 'Calibrate once per objective with a stage micrometer photo.',
                   action: 'Calibrate',
                   onAction: () => context.pushTo(Routes.calibrate),
                 )
@@ -458,7 +516,7 @@ class CalibrationProfilesScreen extends ConsumerWidget {
                       KListRow(
                         title: '${p.objective}× objective',
                         subtitle: 'Saved ${relative(p.savedAt, now)} · ${p.referenceMicrometres.toStringAsFixed(0)} µm reference',
-                        value: '${p.micrometresPerPixel.toStringAsFixed(3)} µm/px',
+                        value: '${p.micrometresPerPixel.toStringAsFixed(4)} µm/px',
                         trailing: KIconButton(
                           icon: KIcons.trash,
                           label: 'Delete ${p.objective}× profile',
@@ -475,27 +533,54 @@ class CalibrationProfilesScreen extends ConsumerWidget {
   }
 }
 
-class PrivacyScreen extends StatelessWidget {
+class PrivacyScreen extends ConsumerWidget {
   const PrivacyScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final t = context.t;
     final k = context.k;
-    Widget p(String s) => Padding(padding: const EdgeInsets.only(bottom: KSpace.s12), child: Text(s, style: t.callout.copyWith(color: k.textSecondary)));
+    final s = ref.watch(settingsProvider);
+    Widget p(String txt) => Padding(
+          padding: const EdgeInsets.only(bottom: KSpace.s12),
+          child: Text(txt, style: t.callout.copyWith(color: k.textSecondary)),
+        );
     return LargeTitleScaffold(
       title: 'Privacy',
       maxContentWidth: 720,
       slivers: [
         SliverList.list(children: [
-          KCard(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [Icon(KIcons.shield, color: k.success), const SizedBox(width: KSpace.s8), Text('Your research data stays private', style: t.headline)]),
-            const SizedBox(height: KSpace.s8),
-            p('Photos, reports, notes and calibration profiles are saved locally first so you never lose work offline. When you sign in, they sync over TLS to your private Supabase account protected by PostgreSQL Row-Level Security.'),
-            p('Exports (PDF, CSV, Excel) are shared externally only when you save or send them yourself.'),
-            p('Phone-to-computer pairing streams live frames directly over your local Wi-Fi network.'),
-            p('Kheryne follows the Data Privacy Act of 2012 (Republic Act No. 10173). Deleting a report in History removes it from both this device and your cloud account.'),
-          ])),
+          KListSection(
+            header: 'MODEL TRAINING CONTRIBUTION',
+            footer: 'When enabled, saved scans enter the VSU Scientist Verification Queue so verified specimens can improve future nematode models.',
+            children: [
+              KListRow(
+                title: 'Contribute scans to model training',
+                leading: KIcons.flask,
+                trailing: Switch(
+                  value: s.trainingOptIn,
+                  onChanged: (v) async {
+                    ref.read(settingsProvider.notifier).update((x) => x.copyWith(trainingOptIn: v));
+                    await ref.read(authProvider.notifier).updateProfile();
+                  },
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: KSpace.s24),
+          KCard(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Icon(KIcons.shield, color: k.success),
+                const SizedBox(width: KSpace.s8),
+                Text('Your research data stays protected', style: t.headline),
+              ]),
+              const SizedBox(height: KSpace.s8),
+              p('Photos, reports, notes and calibration profiles are saved locally first so you never lose work offline. When signed in, they sync over TLS to your Supabase account protected by PostgreSQL Row-Level Security.'),
+              p('Exports (PDF, CSV, Excel) are shared externally only when you save or send them yourself.'),
+              p('Kheryne follows the Data Privacy Act of 2012 (Republic Act No. 10173). Deleting a report in History removes it from both this device and your cloud account.'),
+            ]),
+          ),
         ]),
       ],
     );
@@ -527,6 +612,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
   Widget build(BuildContext context) {
     final t = context.t;
     final k = context.k;
+    final modelVer = ref.watch(settingsProvider).modelVersion;
     return LargeTitleScaffold(
       title: 'About',
       maxContentWidth: 720,
@@ -550,7 +636,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
           const SizedBox(height: KSpace.s24),
           KListSection(children: [
             KListRow(title: 'Version', value: appVersion, onTap: _tapVersion, chevron: false),
-            const KListRow(title: 'Models', value: '2.3.0'),
+            KListRow(title: 'Models', value: modelVer == 'None' ? 'OpenCV baseline' : modelVer),
             const KListRow(title: 'Taxonomy', value: 'NeMys 2026'),
           ]),
           const SizedBox(height: KSpace.s24),

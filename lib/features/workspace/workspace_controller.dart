@@ -28,6 +28,7 @@ class WorkspaceState {
     this.loading = true,
     this.runs = const {},
     this.filter = '',
+    this.lastError,
   });
 
   final List<Specimen> images;
@@ -39,6 +40,7 @@ class WorkspaceState {
   /// Latest analysis per specimen id.
   final Map<String, WorkspaceRun> runs;
   final String filter;
+  final String? lastError;
 
   Specimen? get selected => images.where((s) => s.id == selectedId).firstOrNull;
 
@@ -53,6 +55,8 @@ class WorkspaceState {
     bool? loading,
     Map<String, WorkspaceRun>? runs,
     String? filter,
+    String? lastError,
+    bool clearError = false,
   }) =>
       WorkspaceState(
         images: images ?? this.images,
@@ -62,6 +66,7 @@ class WorkspaceState {
         loading: loading ?? this.loading,
         runs: runs ?? this.runs,
         filter: filter ?? this.filter,
+        lastError: clearError ? null : (lastError ?? this.lastError),
       );
 }
 
@@ -77,8 +82,11 @@ class WorkspaceController extends Notifier<WorkspaceState> {
   Future<void> _load() async {
     final list = await ref.read(identificationRepositoryProvider).specimens();
     if (!ref.mounted || _seeded) return;
-    final images = list.take(8).toList();
-    state = state.copyWith(images: images, selectedId: images.length > 1 ? images[1].id : images.firstOrNull?.id, loading: false);
+    state = state.copyWith(
+      images: list,
+      selectedId: list.firstOrNull?.id,
+      loading: false,
+    );
   }
 
   void select(String id) => state = state.copyWith(selectedId: id);
@@ -117,14 +125,25 @@ class WorkspaceController extends Notifier<WorkspaceState> {
 
   Future<void> analyze(Specimen s, Detection d) async {
     final repo = ref.read(identificationRepositoryProvider);
-    state = state.copyWith(tab: InspectorTab.report, runs: {...state.runs, s.id: WorkspaceRun(detectionId: d.id, stage: AnalysisStage.regions, progress: 0)});
-    await for (final p in repo.analyze(s, d)) {
+    state = state.copyWith(
+      tab: InspectorTab.report,
+      runs: {...state.runs, s.id: WorkspaceRun(detectionId: d.id, stage: AnalysisStage.regions, progress: 0)},
+      lastError: null,
+      clearError: true,
+    );
+    try {
+      await for (final p in repo.analyze(s, d)) {
+        if (!ref.mounted) return;
+        if (p.report != null) ref.read(pendingReportsProvider.notifier).put(p.report!);
+        state = state.copyWith(runs: {
+          ...state.runs,
+          s.id: WorkspaceRun(detectionId: d.id, stage: p.stage, progress: p.stageProgress, reportId: p.report?.id),
+        });
+      }
+    } catch (e) {
       if (!ref.mounted) return;
-      if (p.report != null) ref.read(pendingReportsProvider.notifier).put(p.report!);
-      state = state.copyWith(runs: {
-        ...state.runs,
-        s.id: WorkspaceRun(detectionId: d.id, stage: p.stage, progress: p.stageProgress, reportId: p.report?.id),
-      });
+      final nextRuns = {...state.runs}..remove(s.id);
+      state = state.copyWith(runs: nextRuns, lastError: e.toString());
     }
   }
 }
