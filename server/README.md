@@ -23,6 +23,8 @@ Designed to run locally during development or for **$0/month** on **Hugging Face
 | `POST` | `/v1/detect` | Detects candidate nematode bounding boxes (`0..1` normalized rects) on a microscope image |
 | `POST` | `/v1/check-box` | Verifies whether a cropped user/candidate box contains a plant-parasitic nematode |
 | `POST` | `/v1/analyze` | Hierarchical `Order -> Family -> Genus` classification, diagnostic traits, and region localization |
+| `POST` | `/v1/train` | Exports verified Gold + Silver samples from Supabase, trains YOLOv8 (`detector.onnx`) + MobileNetV3 (`classifier.onnx`), and hot-reloads the engine |
+| `POST` | `/v1/reload` | Reloads `detector.onnx`, `classifier.onnx`, and `model_meta.json` into memory without restarting |
 
 ## Exporting Verified Training Data & Plugging in Trained Models
 

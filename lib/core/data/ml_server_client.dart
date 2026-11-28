@@ -23,14 +23,38 @@ class MlServerHealth {
     required this.detectorEngine,
     required this.classifierEngine,
     required this.modelVersion,
+    this.trainedGenera = const [],
+    this.sampleCount = 0,
   });
 
   final bool reachable;
   final String detectorEngine;
   final String classifierEngine;
   final String modelVersion;
+  final List<String> trainedGenera;
+  final int sampleCount;
 
   bool get classifierReady => reachable && classifierEngine == 'onnx';
+}
+
+class MlTrainResult {
+  const MlTrainResult({
+    required this.modelVersion,
+    required this.sampleCount,
+    required this.cropCount,
+    required this.trainedGenera,
+    required this.detectorSizeMb,
+    required this.classifierSizeMb,
+    required this.valAccuracy,
+  });
+
+  final String modelVersion;
+  final int sampleCount;
+  final int cropCount;
+  final List<String> trainedGenera;
+  final double detectorSizeMb;
+  final double classifierSizeMb;
+  final double valAccuracy;
 }
 
 class MlDetectResult {
@@ -89,11 +113,14 @@ class MlServerClient {
         );
       }
       final body = jsonDecode(resp.body) as Map<String, dynamic>;
+      final rawGenera = body['trained_genera'] as List<dynamic>? ?? const <dynamic>[];
       return MlServerHealth(
         reachable: true,
         detectorEngine: body['detector_engine'] as String? ?? 'opencv-morphological',
         classifierEngine: body['classifier_engine'] as String? ?? 'untrained',
         modelVersion: body['model_version'] as String? ?? '—',
+        trainedGenera: [for (final g in rawGenera) g.toString()],
+        sampleCount: (body['sample_count'] as num? ?? 0).toInt(),
       );
     } catch (_) {
       return const MlServerHealth(
@@ -215,6 +242,53 @@ class MlServerClient {
           parseRegion(e.key): rectFromJson(Map<String, dynamic>.from(e.value as Map)),
       },
       modelVersion: body['model_version'] as String? ?? '—',
+    );
+  }
+
+  Future<MlTrainResult> trainModels({
+    int epochsDetector = 20,
+    int epochsClassifier = 28,
+  }) async {
+    http.Response resp;
+    try {
+      resp = await http
+          .post(
+            _uri('/v1/train'),
+            headers: {
+              ..._headers(),
+              'Content-Type': 'application/json',
+            },
+            body: jsonEncode({
+              'epochs_detector': epochsDetector,
+              'epochs_classifier': epochsClassifier,
+            }),
+          )
+          .timeout(const Duration(minutes: 12));
+    } catch (_) {
+      throw const MlModelUnavailableException(
+        'Cannot reach the Python ML server on port 7860. Make sure server/ is running first.',
+      );
+    }
+
+    if (resp.statusCode != 200) {
+      var detail = 'Training failed (${resp.statusCode}).';
+      try {
+        final err = jsonDecode(resp.body) as Map<String, dynamic>;
+        if (err['detail'] is String) detail = err['detail'] as String;
+      } catch (_) {}
+      throw MlModelUnavailableException(detail);
+    }
+
+    final body = jsonDecode(resp.body) as Map<String, dynamic>;
+    final rawGenera = body['trained_genera'] as List<dynamic>? ?? const <dynamic>[];
+    return MlTrainResult(
+      modelVersion: body['model_version'] as String? ?? '0.1.0',
+      sampleCount: (body['sample_count'] as num? ?? 0).toInt(),
+      cropCount: (body['crop_count'] as num? ?? 0).toInt(),
+      trainedGenera: [for (final g in rawGenera) g.toString()],
+      detectorSizeMb: (body['detector_size_mb'] as num? ?? 0).toDouble(),
+      classifierSizeMb: (body['classifier_size_mb'] as num? ?? 0).toDouble(),
+      valAccuracy: (body['classifier_val_accuracy'] as num? ?? 0).toDouble(),
     );
   }
 }

@@ -71,3 +71,24 @@ class HealthResponse(BaseModel):
     detector_engine: str
     classifier_engine: str
     model_version: str
+    trained_genera: List[str] = []
+    sample_count: int = 0
+
+
+class TrainRequest(BaseModel):
+    epochs_detector: int = Field(default=20, ge=3, le=100)
+    epochs_classifier: int = Field(default=28, ge=5, le=150)
+
+
+class TrainResponse(BaseModel):
+    status: str
+    model_version: str
+    sample_count: int
+    crop_count: int
+    trained_genera: List[str]
+    per_genus_counts: Dict[str, int]
+    detector_size_mb: float
+    classifier_size_mb: float
+    classifier_val_accuracy: float
+    detector_engine: str
+    classifier_engine: str

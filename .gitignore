@@ -56,3 +56,7 @@ server/**/__pycache__/
 server/models/*.onnx
 server/models/*.pt
 server/models/*.tflite
+server/models/model_meta.json
+server/*.pt
+server/training_work/
+server/dataset_out/

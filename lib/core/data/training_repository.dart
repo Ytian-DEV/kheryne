@@ -1,5 +1,5 @@
 import 'dart:io';
-import 'dart:ui';
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -71,7 +71,7 @@ class TrainingAnnotation {
   });
 
   final String id;
-  final Rect rect;
+  final ui.Rect rect;
   final String classLabel;
   final String? genusLabel;
   final double? confidence;
@@ -206,6 +206,16 @@ class TrainingDatasetRepository {
           fileOptions: FileOptions(upsert: true, contentType: _contentType(fileName)),
         );
 
+    int? imgWidth;
+    int? imgHeight;
+    try {
+      final codec = await ui.instantiateImageCodec(imageBytes);
+      final frame = await codec.getNextFrame();
+      imgWidth = frame.image.width;
+      imgHeight = frame.image.height;
+      frame.image.dispose();
+    } catch (_) {}
+
     final genusInfo = reference.genus(verifiedGenus);
     final inserted = await sb
         .from('training_samples')
@@ -217,6 +227,8 @@ class TrainingDatasetRepository {
           'storage_bucket': 'training-dataset',
           'storage_path': objectPath,
           'file_name': fileName,
+          'image_width': imgWidth,
+          'image_height': imgHeight,
           'objective': objective,
           'life_stage': lifeStage,
           'crop': (crop == null || crop.trim().isEmpty) ? null : crop.trim(),
@@ -237,7 +249,7 @@ class TrainingDatasetRepository {
         : [
             TrainingAnnotation(
               id: newUuid(),
-              rect: const Rect.fromLTRB(0.15, 0.15, 0.85, 0.85),
+              rect: const ui.Rect.fromLTRB(0.15, 0.15, 0.85, 0.85),
               classLabel: 'nematode',
               genusLabel: verifiedGenus,
               isGroundTruth: true,

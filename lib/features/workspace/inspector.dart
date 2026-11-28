@@ -90,11 +90,37 @@ class _Detections extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(st.summary, style: t.captionStrong),
+        if (st.statusMessage != null) ...[
+          StatusBanner(
+            title: 'Detection status',
+            message: st.statusMessage,
+            tone: BannerTone.warning,
+          ),
+          const SizedBox(height: KSpace.s12),
+        ],
+        Row(
+          children: [
+            Expanded(child: Text(st.summary, style: t.captionStrong)),
+            KButton.tertiary(
+              label: 'Auto-detect',
+              icon: KIcons.crosshair,
+              size: KButtonSize.compact,
+              onPressed: c.redetect,
+            ),
+          ],
+        ),
         const SizedBox(height: KSpace.s8),
-        if (st.detections.isEmpty)
-          Text('No candidates found. Draw a box (B) around anything you think is a nematode.', style: t.caption)
-        else
+        if (st.detections.isEmpty) ...[
+          Text('No candidates found yet. Click Auto-detect to scan with YOLO, or draw a box (B) around the nematode.', style: t.caption),
+          const SizedBox(height: KSpace.s12),
+          KButton.secondary(
+            label: 'Run AI auto-detect',
+            icon: KIcons.crosshair,
+            expand: true,
+            size: KButtonSize.compact,
+            onPressed: c.redetect,
+          ),
+        ] else
           ClipRRect(
             borderRadius: KRadius.cardAll,
             child: ColoredBox(

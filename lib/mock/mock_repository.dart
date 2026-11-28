@@ -176,7 +176,7 @@ class MockIdentificationRepository implements IdentificationRepository {
   }
 
   @override
-  Future<List<Detection>> detect(Specimen specimen) async {
+  Future<List<Detection>> detect(Specimen specimen, {bool forceRefresh = false}) async {
     await _wait();
     final r = math.Random(specimen.seed);
     return [
