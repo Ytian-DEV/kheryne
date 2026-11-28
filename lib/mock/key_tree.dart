@@ -27,7 +27,7 @@ class KeyQuestion {
   final String noLabel;
 }
 
-/// Practical key to the 19 genera recorded in the Philippines.
+/// Practical key to the target genera recorded in the Philippines.
 const keyQuestions = <String, KeyQuestion>{
   'stylet': KeyQuestion(
     id: 'stylet',
@@ -89,9 +89,17 @@ const keyQuestions = <String, KeyQuestion>{
     id: 'retrorse',
     question: 'Do the ring edges point backwards (retrorse)?',
     hint: 'Look at the body outline. Retrorse rings have a saw-tooth edge that points towards the tail.',
-    yes: '=Criconemoides', no: '=Mesocriconema',
+    yes: 'ringFringe', no: '=Mesocriconema',
     yesIllustration: Illustration.annulatedRetrorse, noIllustration: Illustration.annulated,
     yesLabel: 'Saw-tooth edges', noLabel: 'Smooth, rounded rings',
+  ),
+  'ringFringe': KeyQuestion(
+    id: 'ringFringe',
+    question: 'Do the retrorse rings bear cuticular spines, scales, or fringes?',
+    hint: 'Adult Criconema females have spiny, scaly, or fringed posterior ring margins, whereas Criconemoides rings have plain retrorse edges.',
+    yes: '=Criconema', no: '=Criconemoides',
+    yesIllustration: Illustration.annulatedRetrorse, noIllustration: Illustration.annulated,
+    yesLabel: 'Spines, scales or fringes', noLabel: 'Plain retrorse edges',
   ),
   'swollen': KeyQuestion(
     id: 'swollen',

@@ -34,8 +34,12 @@ abstract interface class IdentificationRepository {
 abstract interface class ReferenceRepository {
   List<TaxonOrder> get taxonomy;
 
-  /// The 19 genera recorded in the Philippines that Kheryne identifies.
+  /// Target genera recorded in the Philippines that Kheryne identifies.
   List<GenusInfo> get targetGenera;
+
+  /// Complete list of all NeMys taxonomy genera (target genera first, followed
+  /// by all remaining accepted plant-parasitic genera).
+  List<GenusInfo> get allGenera;
 
   GenusInfo genus(String name);
 

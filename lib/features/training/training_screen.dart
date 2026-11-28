@@ -152,10 +152,15 @@ class _LabSampleComposerState extends ConsumerState<_LabSampleComposer> {
     final cache = ref.read(localCacheProvider);
     final tempId = newUuid();
     final savedPath = await cache.persistImageBytes(tempId, file.name, bytes);
+    final inferred = _inferGenusFromFileName(
+      file.name,
+      ref.read(referenceRepositoryProvider).allGenera,
+    );
 
     setState(() {
       _bytes = bytes;
       _fileName = file.name;
+      if (inferred != null) _genus = inferred;
       _detecting = true;
       _tempSpecimen = Specimen(
         id: tempId,
@@ -291,31 +296,13 @@ class _LabSampleComposerState extends ConsumerState<_LabSampleComposer> {
   }
 
   Future<void> _pickGenus() async {
-    final genera = ref.read(referenceRepositoryProvider).targetGenera;
-    final picked = await showKBottomSheet<String>(
+    final repo = ref.read(referenceRepositoryProvider);
+    final picked = await _showGenusPickerSheet(
       context,
       title: 'Ground-truth genus',
-      initial: 0.75,
-      detents: const [0.75, 0.95],
-      builder: (ctx, c) => ListView(
-        controller: c,
-        padding: const EdgeInsets.all(KSpace.s16),
-        children: [
-          KListSection(
-            children: [
-              for (final g in genera)
-                KListRow(
-                  title: g.name,
-                  titleWidget: GenusName(g.name, style: ctx.t.bodyStyle),
-                  subtitle: '${g.commonName} · ${g.family}',
-                  trailing: g.name == _genus ? Icon(KIcons.check, color: ctx.k.primary, size: KSize.icon) : null,
-                  chevron: false,
-                  onTap: () => Navigator.of(ctx).pop(g.name),
-                ),
-            ],
-          ),
-        ],
-      ),
+      current: _genus,
+      targetGenera: repo.targetGenera,
+      allGenera: repo.allGenera,
     );
     if (picked != null) setState(() => _genus = picked);
   }
@@ -553,31 +540,13 @@ class _QueueSampleCardState extends ConsumerState<_QueueSampleCard> {
   bool _busy = false;
 
   Future<void> _pickGenus() async {
-    final genera = ref.read(referenceRepositoryProvider).targetGenera;
-    final picked = await showKBottomSheet<String>(
+    final repo = ref.read(referenceRepositoryProvider);
+    final picked = await _showGenusPickerSheet(
       context,
       title: 'Assign verified genus',
-      initial: 0.75,
-      detents: const [0.75, 0.95],
-      builder: (ctx, c) => ListView(
-        controller: c,
-        padding: const EdgeInsets.all(KSpace.s16),
-        children: [
-          KListSection(
-            children: [
-              for (final g in genera)
-                KListRow(
-                  title: g.name,
-                  titleWidget: GenusName(g.name, style: ctx.t.bodyStyle),
-                  subtitle: g.commonName,
-                  trailing: g.name == _selectedGenus ? Icon(KIcons.check, color: ctx.k.primary, size: KSize.icon) : null,
-                  chevron: false,
-                  onTap: () => Navigator.of(ctx).pop(g.name),
-                ),
-            ],
-          ),
-        ],
-      ),
+      current: _selectedGenus,
+      targetGenera: repo.targetGenera,
+      allGenera: repo.allGenera,
     );
     if (picked != null) setState(() => _selectedGenus = picked);
   }
@@ -758,7 +727,7 @@ class _DatasetBalanceView extends ConsumerWidget {
               ],
             ),
             const SizedBox(height: KSpace.s24),
-            Text('VERIFIED SAMPLES PER GENUS (19 TARGET GENERA)', style: t.sectionHeader),
+            Text('VERIFIED SAMPLES PER GENUS (${genera.length} TARGET GENERA)', style: t.sectionHeader),
             const SizedBox(height: KSpace.s8),
             KListSection(
               children: [
@@ -772,6 +741,23 @@ class _DatasetBalanceView extends ConsumerWidget {
                   ),
               ],
             ),
+            if (summary.perGenusVerified.keys.any((kName) => !genera.any((g) => g.name == kName))) ...[
+              const SizedBox(height: KSpace.s24),
+              Text('ADDITIONAL NEMYS GENERA IN DATASET', style: t.sectionHeader),
+              const SizedBox(height: KSpace.s8),
+              KListSection(
+                children: [
+                  for (final entry in summary.perGenusVerified.entries)
+                    if (!genera.any((g) => g.name == entry.key))
+                      KListRow(
+                        title: entry.key,
+                        titleWidget: GenusName(entry.key, style: t.bodyStyle),
+                        value: '${entry.value} verified',
+                        chevron: false,
+                      ),
+                ],
+              ),
+            ],
             const SizedBox(height: KSpace.s24),
             KCard(
               child: Column(
@@ -780,7 +766,7 @@ class _DatasetBalanceView extends ConsumerWidget {
                   Text('Export YOLO + Classifier Dataset', style: t.headline),
                   const SizedBox(height: KSpace.s8),
                   Text(
-                    'Run server/export_dataset.py with your Supabase URL and service key (or Scientist token) to export verified Gold & Silver samples into Ultralytics YOLO detection format and cropped 19-genus classification folders:',
+                    'Run server/export_dataset.py with your Supabase URL and service key (or Scientist token) to export verified Gold & Silver samples into Ultralytics YOLO detection format and cropped genus classification folders:',
                     style: t.caption,
                   ),
                   const SizedBox(height: KSpace.s8),
@@ -794,6 +780,166 @@ class _DatasetBalanceView extends ConsumerWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+String? _inferGenusFromFileName(String fileName, List<GenusInfo> allGenera) {
+  final lower = fileName.toLowerCase();
+  final sorted = [...allGenera]..sort((a, b) => b.name.length.compareTo(a.name.length));
+  for (final g in sorted) {
+    final gLower = g.name.toLowerCase();
+    if (RegExp('(^|[^a-z])$gLower([^a-z]|\$)').hasMatch(lower)) {
+      return g.name;
+    }
+  }
+  return null;
+}
+
+Future<String?> _showGenusPickerSheet(
+  BuildContext context, {
+  required String title,
+  required String current,
+  required List<GenusInfo> targetGenera,
+  required List<GenusInfo> allGenera,
+}) {
+  return showKBottomSheet<String>(
+    context,
+    title: title,
+    initial: 0.85,
+    detents: const [0.65, 0.85, 0.95],
+    builder: (ctx, scrollController) => _GenusPickerList(
+      scrollController: scrollController,
+      current: current,
+      targetGenera: targetGenera,
+      allGenera: allGenera,
+    ),
+  );
+}
+
+class _GenusPickerList extends StatefulWidget {
+  const _GenusPickerList({
+    required this.scrollController,
+    required this.current,
+    required this.targetGenera,
+    required this.allGenera,
+  });
+
+  final ScrollController scrollController;
+  final String current;
+  final List<GenusInfo> targetGenera;
+  final List<GenusInfo> allGenera;
+
+  @override
+  State<_GenusPickerList> createState() => _GenusPickerListState();
+}
+
+class _GenusPickerListState extends State<_GenusPickerList> {
+  String _query = '';
+
+  bool _matches(GenusInfo g, String q) {
+    if (q.isEmpty) return true;
+    return g.name.toLowerCase().contains(q) ||
+        g.family.toLowerCase().contains(q) ||
+        g.commonName.toLowerCase().contains(q);
+  }
+
+  String? _normalizedCustom(String raw) {
+    final clean = raw.trim().replaceAll(RegExp(r'[^A-Za-z]'), '');
+    if (clean.length < 3) return null;
+    final cap = '${clean[0].toUpperCase()}${clean.substring(1).toLowerCase()}';
+    if (widget.allGenera.any((g) => g.name.toLowerCase() == cap.toLowerCase())) {
+      return null;
+    }
+    return cap;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final q = _query.trim().toLowerCase();
+    final targetNames = {for (final g in widget.targetGenera) g.name};
+    final filteredTarget = [
+      for (final g in widget.targetGenera)
+        if (_matches(g, q)) g,
+    ];
+    final filteredOther = [
+      for (final g in widget.allGenera)
+        if (!targetNames.contains(g.name) && _matches(g, q)) g,
+    ];
+    final custom = _normalizedCustom(_query);
+
+    return ListView(
+      controller: widget.scrollController,
+      padding: const EdgeInsets.all(KSpace.s16),
+      children: [
+        TextField(
+          autofocus: true,
+          onChanged: (v) => setState(() => _query = v),
+          decoration: const InputDecoration(
+            hintText: 'Search genus, family or common name (e.g. Criconema)…',
+            prefixIcon: Icon(KIcons.search, size: KSize.icon),
+          ),
+        ),
+        const SizedBox(height: KSpace.s16),
+        if (filteredTarget.isNotEmpty) ...[
+          KListSection(
+            header: 'PHILIPPINE TARGET GENERA (${filteredTarget.length})',
+            children: [
+              for (final g in filteredTarget)
+                KListRow(
+                  title: g.name,
+                  titleWidget: GenusName(g.name, style: context.t.bodyStyle),
+                  subtitle: '${g.commonName} · ${g.family}',
+                  trailing: g.name == widget.current
+                      ? Icon(KIcons.check, color: context.k.primary, size: KSize.icon)
+                      : null,
+                  chevron: false,
+                  onTap: () => Navigator.of(context).pop(g.name),
+                ),
+            ],
+          ),
+          const SizedBox(height: KSpace.s16),
+        ],
+        if (filteredOther.isNotEmpty) ...[
+          KListSection(
+            header: 'ALL NEMYS 2026 GENERA (${filteredOther.length})',
+            footer: 'Accepted plant-parasitic genera across all 14 families.',
+            children: [
+              for (final g in filteredOther)
+                KListRow(
+                  title: g.name,
+                  titleWidget: GenusName(g.name, style: context.t.bodyStyle),
+                  subtitle: '${g.family} · ${g.order}',
+                  trailing: g.name == widget.current
+                      ? Icon(KIcons.check, color: context.k.primary, size: KSize.icon)
+                      : null,
+                  chevron: false,
+                  onTap: () => Navigator.of(context).pop(g.name),
+                ),
+            ],
+          ),
+          const SizedBox(height: KSpace.s16),
+        ],
+        if (custom != null)
+          KListSection(
+            header: 'CUSTOM GENUS LABEL',
+            children: [
+              KListRow(
+                title: custom,
+                titleWidget: Row(
+                  children: [
+                    Text('Use ', style: context.t.bodyStyle),
+                    GenusName(custom, style: context.t.bodyStyle),
+                  ],
+                ),
+                subtitle: 'Save ground-truth label for a genus outside the bundled list',
+                leading: KIcons.plus,
+                chevron: false,
+                onTap: () => Navigator.of(context).pop(custom),
+              ),
+            ],
+          ),
+      ],
     );
   }
 }

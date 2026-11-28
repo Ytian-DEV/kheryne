@@ -308,7 +308,7 @@ class _Result extends ConsumerWidget {
           Expanded(child: KButton(label: 'Open in gallery', expand: true, onPressed: () => context.pushTo(Routes.genus(genus)))),
         ]),
         const SizedBox(height: KSpace.s12),
-        Text('Generated ${now.day}/${now.month}/${now.year}. The key covers the 19 genera recorded in the Philippines.',
+        Text('Generated ${now.day}/${now.month}/${now.year}. The key covers the target genera recorded in the Philippines.',
             style: t.caption, textAlign: TextAlign.center),
       ],
     );
