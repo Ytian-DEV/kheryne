@@ -159,6 +159,7 @@ void main() {
     await tester.tap(find.text('Dataset stats'));
     await settle(tester);
     expect(find.text('TRAINING PIPELINE SUMMARY'), findsOneWidget);
+    expect(find.text('Criconema'), findsOneWidget);
     expect(find.text('Export YOLO + Classifier Dataset'), findsOneWidget);
   });
 

@@ -6,7 +6,7 @@ const _e = SpecimenRegion.esophagus;
 const _v = SpecimenRegion.vulva;
 const _t = SpecimenRegion.tail;
 
-/// The 19 genera recorded in the Philippines. Report results draw only from
+/// Target genera recorded in the Philippines. Report results draw from
 /// this list. Measurements are typical ranges for adult females and are
 /// mock values for UI work, not a diagnostic reference.
 const philippineGenera = <GenusInfo>[
@@ -198,6 +198,25 @@ const philippineGenera = <GenusInfo>[
     recordedInPhilippines: true,
   ),
   GenusInfo(
+    name: 'Criconema',
+    family: 'Criconematidae',
+    order: 'Rhabditida',
+    commonName: 'Spine / scaly ring nematode',
+    summary: 'Short, stout ectoparasite with coarse retrorse body rings bearing cuticular scales, spines, or posterior fringes.',
+    traits: [
+      Trait(name: 'Cuticle', value: 'Coarse retrorse annules with scales or fringes', why: 'Cuticular spines, scales, or posterior fringes along the coarse rings separate Criconema from plain-ringed Criconemoides.', region: _v, illustration: Illustration.annulatedRetrorse),
+      Trait(name: 'Stylet', value: '50–85 µm, robust anchor-shaped knobs', why: 'A long, stout stomatostylet with anteriorly cupped or anchor-shaped knobs supports ectoparasitic root feeding.', region: _s, illustration: Illustration.styletKnobbed),
+      Trait(name: 'Vulva position', value: '~90–93% (far posterior)', why: 'A strongly posterior, closed or overhanging vulva is characteristic of Criconematidae females.', region: _v, illustration: Illustration.vulvaPosterior),
+    ],
+    similar: [
+      SimilarGenus('Criconemoides', 'Criconemoides has retrorse rings with smooth, plain margins rather than spines, scales, or fringes.'),
+      SimilarGenus('Mesocriconema', 'Mesocriconema annules are smooth or crenated without cuticular scales or spines.'),
+    ],
+    crops: ['Coconut', 'Banana', 'Citrus', 'Forest & fruit trees'],
+    imageSeeds: [204, 205, 206],
+    recordedInPhilippines: true,
+  ),
+  GenusInfo(
     name: 'Criconemoides',
     family: 'Criconematidae',
     order: 'Rhabditida',
@@ -209,6 +228,7 @@ const philippineGenera = <GenusInfo>[
       Trait(name: 'Vulva position', value: '~90%', why: 'A very posterior vulva is shared by Criconematidae.', region: _v, illustration: Illustration.vulvaPosterior),
     ],
     similar: [
+      SimilarGenus('Criconema', 'Criconema bears cuticular scales, spines, or posterior fringes on the annules.'),
       SimilarGenus('Mesocriconema', 'Mesocriconema rings are smooth and rounded, not retrorse.'),
     ],
     crops: ['Coconut', 'Banana', 'Fruit trees'],

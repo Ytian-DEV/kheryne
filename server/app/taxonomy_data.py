@@ -1,4 +1,4 @@
-"""Reference metadata for the 19 plant-parasitic nematode genera recorded in the Philippines."""
+"""Reference metadata for the target plant-parasitic nematode genera recorded in the Philippines."""
 
 PHILIPPINE_GENERA = [
     {
@@ -116,11 +116,22 @@ PHILIPPINE_GENERA = [
         ],
     },
     {
+        "name": "Criconema",
+        "family": "Criconematidae",
+        "order": "Rhabditida",
+        "vulva_pct": 0.91,
+        "similar": ["Criconemoides", "Mesocriconema"],
+        "traits": [
+            {"name": "Cuticle", "value": "Coarse retrorse annules with scales or fringes", "why": "Cuticular spines, scales, or posterior fringes along the coarse rings separate Criconema from plain-ringed Criconemoides.", "region": "vulva", "illustration": "annulatedRetrorse"},
+            {"name": "Stylet", "value": "50–85 µm, robust anchor-shaped knobs", "why": "A long, stout stomatostylet with anteriorly cupped or anchor-shaped knobs supports ectoparasitic root feeding.", "region": "stylet", "illustration": "styletKnobbed"},
+        ],
+    },
+    {
         "name": "Criconemoides",
         "family": "Criconematidae",
         "order": "Rhabditida",
         "vulva_pct": 0.90,
-        "similar": ["Mesocriconema"],
+        "similar": ["Criconema", "Mesocriconema"],
         "traits": [
             {"name": "Cuticle", "value": "Coarse annules, retrorse edges", "why": "Backward-pointing ring edges separate Criconemoides from Mesocriconema.", "region": "vulva", "illustration": "annulatedRetrorse"},
         ],

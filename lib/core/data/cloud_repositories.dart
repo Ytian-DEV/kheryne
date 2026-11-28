@@ -48,6 +48,29 @@ class CloudReferenceRepository implements ReferenceRepository {
   List<GenusInfo> get targetGenera => _targetGenera;
 
   @override
+  List<GenusInfo> get allGenera {
+    final targetNames = {for (final g in _targetGenera) g.name};
+    final extras = <GenusInfo>[];
+    final seen = <String>{...targetNames};
+    for (final order in _taxonomy) {
+      for (final fam in order.families) {
+        for (final gName in fam.genera) {
+          if (seen.add(gName)) {
+            extras.add(genus(gName));
+          }
+        }
+      }
+    }
+    for (final entry in _allGenera.entries) {
+      if (seen.add(entry.key)) {
+        extras.add(entry.value);
+      }
+    }
+    extras.sort((a, b) => a.name.compareTo(b.name));
+    return [..._targetGenera, ...extras];
+  }
+
+  @override
   GenusInfo genus(String name) {
     final hit = _allGenera[name];
     if (hit != null) return hit;

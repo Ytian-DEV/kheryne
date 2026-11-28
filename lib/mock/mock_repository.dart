@@ -21,6 +21,7 @@ const _morpho = <String, (double, double, double, double, double, double)>{
   'Rotylenchus': (1000, 33, 8.0, 50, 58, 32),
   'Rotylenchulus': (420, 24, 4.5, 15, 70, 18),
   'Tylenchorhynchus': (690, 30, 5.6, 15, 56, 19),
+  'Criconema': (460, 10, 4.1, 20, 91, 62),
   'Criconemoides': (480, 10, 4.2, 22, 90, 60),
   'Mesocriconema': (520, 11, 4.4, 21, 92, 65),
   'Hemicriconemoides': (560, 13, 4.6, 24, 92, 70),
@@ -50,6 +51,23 @@ class MockReferenceRepository implements ReferenceRepository {
 
   @override
   List<GenusInfo> get targetGenera => philippineGenera;
+
+  @override
+  List<GenusInfo> get allGenera {
+    final targetNames = {for (final g in philippineGenera) g.name};
+    final extras = <GenusInfo>[];
+    for (final order in nemysTaxonomy) {
+      for (final fam in order.families) {
+        for (final gName in fam.genera) {
+          if (!targetNames.contains(gName)) {
+            extras.add(genus(gName));
+          }
+        }
+      }
+    }
+    extras.sort((a, b) => a.name.compareTo(b.name));
+    return [...philippineGenera, ...extras];
+  }
 
   @override
   GenusInfo genus(String name) {
