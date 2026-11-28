@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/config/app_config.dart';
+import '../../core/data/ml_server_client.dart';
 import '../../core/data/training_repository.dart';
 import '../../core/layout/form_factor.dart';
 import '../../core/models/models.dart';
@@ -22,6 +23,10 @@ const _labImageGroup = XTypeGroup(
 );
 
 enum _TrainingTab { labGroundTruth, reviewQueue, datasetBalance }
+
+final mlHealthProvider = FutureProvider<MlServerHealth>(
+  (ref) => ref.watch(mlServerClientProvider).checkHealth(),
+);
 
 final trainingSummaryProvider = FutureProvider<DatasetSummary>(
   (ref) => ref.watch(trainingRepositoryProvider).fetchSummary(),
@@ -696,12 +701,51 @@ class _QueueSampleCardState extends ConsumerState<_QueueSampleCard> {
   }
 }
 
-class _DatasetBalanceView extends ConsumerWidget {
+class _DatasetBalanceView extends ConsumerStatefulWidget {
   const _DatasetBalanceView();
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_DatasetBalanceView> createState() => _DatasetBalanceViewState();
+}
+
+class _DatasetBalanceViewState extends ConsumerState<_DatasetBalanceView> {
+  bool _training = false;
+  MlTrainResult? _lastTrain;
+  String? _trainError;
+
+  Future<void> _runTraining() async {
+    setState(() {
+      _training = true;
+      _trainError = null;
+    });
+    try {
+      final res = await ref.read(mlServerClientProvider).trainModels();
+      final now = ref.read(clockProvider)();
+      ref.read(settingsProvider.notifier).update(
+            (s) => s.copyWith(
+              modelVersion: res.modelVersion,
+              modelSizeMb: double.parse((res.detectorSizeMb + res.classifierSizeMb).toStringAsFixed(1)),
+              lastModelCheckAt: now,
+            ),
+          );
+      ref.invalidate(mlHealthProvider);
+      ref.invalidate(trainingSummaryProvider);
+      if (mounted) {
+        setState(() => _lastTrain = res);
+        showToast(context, 'Trained & hot-reloaded AI model v${res.modelVersion}!');
+      }
+    } catch (e) {
+      if (mounted) setState(() => _trainError = e.toString());
+    } finally {
+      if (mounted) setState(() => _training = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final summaryAsync = ref.watch(trainingSummaryProvider);
+    final healthAsync = ref.watch(mlHealthProvider);
+    final isCurator = ref.watch(authProvider).isScientistOrOwner;
     final genera = ref.watch(referenceRepositoryProvider).targetGenera;
     final t = context.t;
     final k = context.k;
@@ -715,6 +759,83 @@ class _DatasetBalanceView extends ConsumerWidget {
         data: (summary) => Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            KCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Icon(KIcons.cpu, color: k.primary, size: KSize.icon),
+                      const SizedBox(width: KSpace.s8),
+                      Expanded(child: Text('Centralized AI Brain (YOLOv8 + Classifier)', style: t.headline)),
+                      KIconButton(
+                        icon: KIcons.retry,
+                        label: 'Refresh server status',
+                        onPressed: () => ref.invalidate(mlHealthProvider),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: KSpace.s8),
+                  healthAsync.when(
+                    loading: () => Text('Checking local/cloud ML server…', style: t.caption),
+                    error: (_, _) => Text('ML server status unavailable', style: t.caption),
+                    data: (h) => Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          h.reachable
+                              ? 'Server online · Detector: ${h.detectorEngine.toUpperCase()} · Classifier: ${h.classifierEngine.toUpperCase()} · Version: ${h.modelVersion}'
+                              : 'ML server offline · Start server/ on port 7860 to train or run live detections.',
+                          style: t.caption.copyWith(color: h.classifierReady ? k.success : k.textSecondary),
+                        ),
+                        if (h.trainedGenera.isNotEmpty) ...[
+                          const SizedBox(height: KSpace.s8),
+                          Wrap(
+                            spacing: KSpace.s8,
+                            runSpacing: KSpace.s4,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            children: [
+                              Text('Trained genera:', style: t.captionStrong),
+                              for (final gName in h.trainedGenera) GenusName(gName, style: t.calloutStrong),
+                            ],
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  if (_lastTrain != null) ...[
+                    const SizedBox(height: KSpace.s12),
+                    StatusBanner(
+                      title: 'Model v${_lastTrain!.modelVersion} trained & hot-reloaded',
+                      message:
+                          'Trained on ${_lastTrain!.sampleCount} verified slides (${_lastTrain!.cropCount} crops) · Validation accuracy: ${(_lastTrain!.valAccuracy * 100).toStringAsFixed(1)}%',
+                      tone: BannerTone.success,
+                    ),
+                  ],
+                  if (_trainError != null) ...[
+                    const SizedBox(height: KSpace.s12),
+                    StatusBanner(
+                      title: 'Could not run training',
+                      message: _trainError,
+                      tone: BannerTone.error,
+                    ),
+                  ],
+                  if (isCurator) ...[
+                    const SizedBox(height: KSpace.s16),
+                    KButton(
+                      label: _training
+                          ? 'Training YOLOv8 + Genus Classifier…'
+                          : 'Train & Reload AI Model (${summary.totalVerified} verified slides)',
+                      icon: KIcons.cpu,
+                      expand: true,
+                      loading: _training,
+                      onPressed: (_training || summary.totalVerified == 0) ? null : _runTraining,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(height: KSpace.s24),
             KListSection(
               header: 'TRAINING PIPELINE SUMMARY',
               footer: 'Only Gold (Scientist lab samples) and Silver (Scientist-verified user scans) are exported for model training.',

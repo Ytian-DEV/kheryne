@@ -280,6 +280,7 @@ class SettingsController extends Notifier<AppSettings> {
     }
 
     if (saved == null) {
+      _syncServerHealthSoon();
       return AppSettings(calibrations: savedCals);
     }
 
@@ -292,6 +293,7 @@ class SettingsController extends Notifier<AppSettings> {
     final system = sysName == 'classic' ? ClassificationSystem.classic : ClassificationSystem.nemys2026;
     final rawCheck = saved['last_model_check_at'] as String?;
 
+    _syncServerHealthSoon();
     return AppSettings(
       themeMode: themeMode,
       scanAlwaysDark: saved['scan_always_dark'] as bool? ?? true,
@@ -307,6 +309,17 @@ class SettingsController extends Notifier<AppSettings> {
       mlServerUrl: saved['ml_server_url'] as String? ?? AppConfig.defaultMlServerUrl,
       trainingOptIn: saved['training_opt_in'] as bool? ?? true,
     );
+  }
+
+  void _syncServerHealthSoon() {
+    if (!AppConfig.supabaseReady) return;
+    Future<void>.microtask(() async {
+      final health = await ref.read(mlServerClientProvider).checkHealth();
+      if (!ref.mounted || !health.reachable) return;
+      if (health.classifierReady && health.modelVersion != 'None' && health.modelVersion != '—') {
+        update((s) => s.copyWith(modelVersion: health.modelVersion));
+      }
+    });
   }
 
   void _persist() {

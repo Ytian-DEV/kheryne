@@ -106,14 +106,18 @@ def export_datasets(base_url: str, api_key: str, out_dir: Path, val_ratio: float
         yolo_lines: List[str] = []
         for box_idx, ann in enumerate(annotations):
             rect = ann.get("rect") or {}
-            left = float(rect.get("left", 0.0))
-            top = float(rect.get("top", 0.0))
-            right = float(rect.get("right", 1.0))
-            bottom = float(rect.get("bottom", 1.0))
-            bw = max(0.001, right - left)
-            bh = max(0.001, bottom - top)
-            cx = left + bw / 2.0
-            cy = top + bh / 2.0
+            raw_l = float(rect.get("left", 0.0))
+            raw_t = float(rect.get("top", 0.0))
+            raw_r = float(rect.get("right", 1.0))
+            raw_b = float(rect.get("bottom", 1.0))
+            left = max(0.0, min(0.98, min(raw_l, raw_r)))
+            top = max(0.0, min(0.98, min(raw_t, raw_b)))
+            right = max(left + 0.01, min(1.0, max(raw_l, raw_r)))
+            bottom = max(top + 0.01, min(1.0, max(raw_t, raw_b)))
+            bw = max(0.01, right - left)
+            bh = max(0.01, bottom - top)
+            cx = min(0.995, max(0.005, left + bw / 2.0))
+            cy = min(0.995, max(0.005, top + bh / 2.0))
             cls_id = CLASS_MAP.get(ann.get("class_label", "nematode"), 0)
             yolo_lines.append(f"{cls_id} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}")
 

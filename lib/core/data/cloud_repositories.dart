@@ -537,10 +537,12 @@ class HybridIdentificationRepository implements IdentificationRepository {
   }
 
   @override
-  Future<List<Detection>> detect(Specimen specimen) async {
+  Future<List<Detection>> detect(Specimen specimen, {bool forceRefresh = false}) async {
     await cache.init();
-    final existing = cache.getDetections(specimen.id);
-    if (existing != null && existing.isNotEmpty) return existing;
+    if (!forceRefresh) {
+      final existing = cache.getDetections(specimen.id);
+      if (existing != null && existing.isNotEmpty) return existing;
+    }
 
     if (isOnline()) {
       final bytes = await readSpecimenBytes(specimen);
@@ -552,7 +554,7 @@ class HybridIdentificationRepository implements IdentificationRepository {
         }
       }
     }
-    return const [];
+    return cache.getDetections(specimen.id) ?? const [];
   }
 
   @override

@@ -12,7 +12,7 @@ abstract interface class IdentificationRepository {
   Future<Specimen?> specimen(String id);
 
   /// Candidate boxes for a specimen (pink boxes).
-  Future<List<Detection>> detect(Specimen specimen);
+  Future<List<Detection>> detect(Specimen specimen, {bool forceRefresh = false});
 
   /// "Check if nematode" for a user-drawn or candidate box.
   Future<BoxCheckResult> checkBox(Specimen specimen, Rect rect);

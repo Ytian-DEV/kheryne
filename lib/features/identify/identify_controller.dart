@@ -93,6 +93,31 @@ class IdentifyController extends Notifier<IdentifyState> {
     }
   }
 
+  Future<void> redetect() async {
+    final s = state.specimen;
+    if (s == null) return;
+    state = state.copyWith(loading: true, clearStatus: true);
+    try {
+      final d = await ref.read(identificationRepositoryProvider).detect(s, forceRefresh: true);
+      if (!ref.mounted) return;
+      final userBoxes = state.detections.where((b) => b.id.startsWith('u')).toList();
+      final combined = [...d, ...userBoxes];
+      state = state.copyWith(
+        detections: combined,
+        selectedId: combined.firstOrNull?.id,
+        loading: false,
+        statusMessage: d.isEmpty
+            ? 'No candidate nematodes detected automatically. Draw a box (B) or verify ML server is running.'
+            : null,
+        clearStatus: d.isNotEmpty,
+      );
+    } catch (e) {
+      if (ref.mounted) {
+        state = state.copyWith(loading: false, statusMessage: e.toString());
+      }
+    }
+  }
+
   void setTool(CanvasTool t) => state = state.copyWith(tool: t, clearSelection: t == CanvasTool.draw);
 
   void select(String? id) {
